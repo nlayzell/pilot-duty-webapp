@@ -115,10 +115,14 @@
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
             const [isLoading, setIsLoading] = useState(false);
+            const [isSigningUp, setIsSigningUp] = useState(false);
 
-            const handleAuthAction = async (action) => {
+            const handleAuthAction = async (actionType) => {
                 const { createUserWithEmailAndPassword, signInWithEmailAndPassword } = window.firebase;
+                const action = actionType === 'signup' ? createUserWithEmailAndPassword : signInWithEmailAndPassword;
+                
                 setIsLoading(true);
+                if (actionType === 'signup') setIsSigningUp(true);
                 setError('');
                 try {
                     const userCredential = await action(auth, email, password);
@@ -127,6 +131,7 @@
                     setError(error.message);
                 } finally {
                     setIsLoading(false);
+                    setIsSigningUp(false);
                 }
             };
 
@@ -135,7 +140,7 @@
                     <div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl">
                         <div>
                             <h2 className="text-3xl font-bold text-center text-sky-400">Pilot Duty Tracker</h2>
-                            <p className="mt-2 text-center text-sm text-slate-400">Sign in to your account</p>
+                            <p className="mt-2 text-center text-sm text-slate-400">Sign in or create an account</p>
                         </div>
                         {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg text-center">{error}</div>}
                         <div className="space-y-6">
@@ -148,11 +153,11 @@
                                 <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500"/>
                             </div>
                             <div className="flex gap-4">
-                                <button onClick={() => handleAuthAction(signInWithEmailAndPassword)} disabled={isLoading} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 disabled:opacity-50">
-                                    {isLoading ? 'Signing In...' : 'Sign In'}
+                                <button onClick={() => handleAuthAction('signin')} disabled={isLoading} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 disabled:opacity-50">
+                                    {isLoading && !isSigningUp ? 'Signing In...' : 'Sign In'}
                                 </button>
-                                <button onClick={() => handleAuthAction(createUserWithEmailAndPassword)} disabled={isLoading} className="w-full flex justify-center py-2 px-4 border border-slate-500 rounded-md shadow-sm text-sm font-medium text-slate-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 disabled:opacity-50">
-                                    {isLoading ? '...' : 'Sign Up'}
+                                <button onClick={() => handleAuthAction('signup')} disabled={isLoading} className="w-full flex justify-center py-2 px-4 border border-slate-500 rounded-md shadow-sm text-sm font-medium text-slate-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 disabled:opacity-50">
+                                    {isLoading && isSigningUp ? '...' : 'Sign Up'}
                                 </button>
                             </div>
                         </div>
@@ -285,7 +290,6 @@
           
           const processAndStoreFlightEntry = async (flightData, pilotIdToLink, entrySource = 'api') => {
             const { collection, addDoc } = window.firebase;
-            // Removed compliance message setting from here to avoid overwriting legality check results
             try {
               const entriesColPath = `users/${user.uid}/pilots/${pilotIdToLink}/flightEntries`;
               await addDoc(collection(db, entriesColPath), { ...flightData, source: entrySource });
@@ -295,12 +299,10 @@
             }
           };
 
-          // --- All other handlers, including API fetching and legality checks, go here ---
-            // This is just a selection of handlers for brevity
-            const handleManualAddPilot = async () => { /* ... same as before */ };
-            const fetchAndProcessFlightsFromAPI = async () => { /* ... same as before, calling processAndStoreFlightEntry */ };
-            const handleManualFormSubmit = async (e) => { /* ... same as before, calling processAndStoreFlightEntry */ };
-            const handleViewDetails = async (flightId) => { /* ... same as before */ };
+          const handleManualAddPilot = async () => { /* ... implementation ... */ };
+          const fetchAndProcessFlightsFromAPI = async () => { /* ... implementation ... */ };
+          const handleManualFormSubmit = async (e) => { /* ... implementation ... */ };
+          const handleViewDetails = async (flightId) => { /* ... implementation ... */ };
 
           const handleLegalityCheck = async () => {
             const { collection, getDocs, query: firestoreQuery } = window.firebase;
@@ -357,7 +359,7 @@
                     
                     const totalPastHours = pastEntries
                         .filter(entry => entry.dutyStartTimestamp.toDate() >= startDate && entry.dutyStartTimestamp.toDate() < proposedStart)
-                        .reduce((sum, entry) => sum + (entry.flightTimeHours || 0), 0); // Added || 0 for safety
+                        .reduce((sum, entry) => sum + (entry.flightTimeHours || 0), 0);
                     
                     const futureTotal = totalPastHours + proposedFT;
 
@@ -381,7 +383,6 @@
               return <LoginScreen auth={auth} setUserId={(uid) => setUser({uid})} setError={setError} error={error} />;
           }
 
-          // Main App JSX returned here if user is logged in
           return (
             <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 font-sans p-4 md:p-8">
               <header className="mb-8 text-center relative">
@@ -396,7 +397,6 @@
               {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
               {apiMessage && <div className={`px-4 py-3 rounded-lg mb-6 ${apiMessage.includes("Error") || apiMessage.includes("failed") ? 'bg-red-700/30 border-red-500 text-red-300' : 'bg-blue-700/30 border-blue-500 text-blue-300'}`}><strong className="font-bold">API Status: </strong><span className="block sm:inline">{apiMessage}</span></div>}
               
-              {/* Legality Check Section */}
               <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
                 <h2 className="text-xl font-semibold text-center text-sky-400">Proposed Flight Legality Check</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
@@ -436,8 +436,6 @@
                     </div>
                 )}
               </div>
-
-              {/* ... The rest of the UI ... */}
             </div>
           );
         }
@@ -448,4 +446,3 @@
     </script>
 </body>
 </html>
-
