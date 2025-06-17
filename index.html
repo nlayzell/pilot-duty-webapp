@@ -122,9 +122,21 @@
                 setError('');
                 try {
                     await signInWithEmailAndPassword(auth, email, password);
-                    // onAuthStateChanged will handle navigating to the app
                 } catch (error) {
-                    setError("Login failed: Invalid email or password. Please contact your administrator.");
+                    setError("Login failed: Invalid email or password.");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+            
+            const handleSignUp = async () => {
+                const { createUserWithEmailAndPassword } = window.firebase;
+                setIsLoading(true);
+                setError('');
+                try {
+                    await createUserWithEmailAndPassword(auth, email, password);
+                } catch (error) {
+                    setError(error.message);
                 } finally {
                     setIsLoading(false);
                 }
@@ -135,7 +147,7 @@
                     <div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl">
                         <div>
                             <h2 className="text-3xl font-bold text-center text-sky-400">Pilot Duty Tracker</h2>
-                            <p className="mt-2 text-center text-sm text-slate-400">Please sign in</p>
+                            <p className="mt-2 text-center text-sm text-slate-400">Sign in to your account</p>
                         </div>
                         {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg text-center">{error}</div>}
                         <div className="space-y-6">
@@ -215,7 +227,7 @@
             return () => unsubscribe();
           }, []);
 
-          // --- Data Fetching Hooks (now using global collections) ---
+          // --- Data Fetching Hooks (using global collections) ---
           useEffect(() => {
             if (!db || !isAuthReady) return;
             const { collection, query, orderBy, onSnapshot } = window.firebase;
@@ -267,6 +279,17 @@
                 return null;
               }
           };
+          
+          const handleManualAddPilot = async () => {
+            setIsLoading(true);
+            const newId = await handleAddPilot(newPilotName, null);
+            if(newId) {
+                setNewPilotName('');
+                setShowAddPilotModal(false);
+                setCurrentPilotId(newId);
+            }
+            setIsLoading(false);
+          };
 
           const handleSignOut = async () => {
               const { signOut } = window.firebase;
@@ -287,10 +310,149 @@
             }
           };
 
-          const handleManualAddPilot = async () => { /* ... implementation ... */ };
-          const fetchAndProcessFlightsFromAPI = async () => { /* ... implementation ... */ };
-          const handleManualFormSubmit = async (e) => { /* ... implementation ... */ };
-          const handleViewDetails = async (flightId) => { /* ... implementation ... */ };
+          const fetchAndProcessFlightsFromAPI = async () => {
+            const { Timestamp, collection, where, getDocs, query: firestoreQuery, doc, getDoc } = window.firebase;
+            setIsApiLoading(true);
+            setApiMessage("Fetching flights...");
+            setError('');
+            const endpoint = `${API_BASE_URL}/api/flights`;
+            const fromDateUTC = new Date(apiFromDate).toISOString();
+            const toDateUTC = new Date(new Date(apiToDate).setHours(23, 59, 59, 999)).toISOString();
+
+            try {
+              const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ fromDate: fromDateUTC, toDate: toDateUTC })
+              });
+              const responseData = await response.json();
+              if (!response.ok) throw new Error(responseData.details || responseData.message || 'Unknown proxy error');
+              
+              const flightsToProcess = responseData.flights || [];
+              if (flightsToProcess.length === 0) {
+                setApiMessage("Successfully fetched, but no flights found in the date range.");
+                setIsApiLoading(false);
+                return;
+              }
+
+              let processedCount = 0;
+              let newPilotsAdded = 0;
+              for (const flight of flightsToProcess) {
+                if (!flight.crew || flight.crew.length === 0) continue;
+
+                const dutyStartStr = flight.flightLogTime?.timeOut || flight.departureTime;
+                const dutyEndStr = flight.flightLogTime?.timeIn || flight.arrivalTime;
+                if (!dutyStartStr || !dutyEndStr) continue;
+
+                const dutyStartTimestamp = Timestamp.fromDate(new Date(dutyStartStr));
+                const dutyEndTimestamp = Timestamp.fromDate(new Date(dutyEndStr));
+                if (dutyStartTimestamp.toMillis() >= dutyEndTimestamp.toMillis()) continue;
+                
+                const dutyPeriodHours = (dutyEndTimestamp.toMillis() - dutyStartTimestamp.toMillis()) / (1000 * 60 * 60);
+                let flightTimeH = flight.flightLogTime?.flight || dutyPeriodHours - 0.5;
+                if(flightTimeH < 0) flightTimeH = 0;
+
+                const apiEntry = {
+                  dutyStartTimestamp,
+                  dutyEndTimestamp,
+                  flightTimeHours: parseFloat(flightTimeH.toFixed(2)),
+                  dutyPeriodHours: parseFloat(dutyPeriodHours.toFixed(2)),
+                  numFlightsInDuty: flight.legs?.length || 1,
+                  createdAt: Timestamp.now(),
+                  foreFlightId: flight.flightId || null,
+                  details: `Flight ${flight.aircraftRegistration} from ${flight.departure} to ${flight.destination}`
+                };
+                
+                for (const crewMember of flight.crew) {
+                  const pilotIdentifier = crewMember.crewId;
+                  if(!pilotIdentifier) continue;
+
+                  const pilotRef = doc(db, `pilots`, pilotIdentifier);
+                  const pilotSnap = await getDoc(pilotRef);
+
+                  if (!pilotSnap.exists()) {
+                      await handleAddPilot(pilotIdentifier, pilotIdentifier);
+                      newPilotsAdded++;
+                  }
+
+                  const entriesColPath = `pilots/${pilotIdentifier}/flightEntries`;
+                  let shouldAddEntry = true;
+                  if(apiEntry.foreFlightId) {
+                    const q = firestoreQuery(collection(db, entriesColPath), where("foreFlightId", "==", apiEntry.foreFlightId));
+                    const existingSnapshot = await getDocs(q);
+                    if (!existingSnapshot.empty) {
+                      shouldAddEntry = false;
+                    }
+                  }
+                  
+                  if (shouldAddEntry) {
+                    await processAndStoreFlightEntry(apiEntry, pilotIdentifier, 'api');
+                    processedCount++;
+                  }
+                }
+              }
+              let finalMessage = `Sync complete. Processed ${processedCount} new flight log entries.`;
+              if (newPilotsAdded > 0) {
+                finalMessage += ` Added ${newPilotsAdded} new pilot(s).`
+              }
+              setApiMessage(finalMessage);
+            } catch (err) {
+              setApiMessage(`Error: ${err.message}`);
+              setError(`API Error: ${err.message}`);
+            } finally {
+              setIsApiLoading(false);
+            }
+          };
+          
+           const handleManualFormSubmit = async (e) => {
+            e.preventDefault();
+            setIsLoading(true);
+            const { Timestamp } = window.firebase;
+            const dutyStartTimestamp = Timestamp.fromDate(new Date(`${dutyDate}T${dutyStartTime}`));
+            let dutyEndTimestamp = Timestamp.fromDate(new Date(`${dutyDate}T${dutyEndTime}`));
+            if (dutyEndTimestamp.toMillis() <= dutyStartTimestamp.toMillis()) {
+                const nextDay = new Date(dutyDate);
+                nextDay.setDate(nextDay.getDate() + 1);
+                dutyEndTimestamp = Timestamp.fromDate(new Date(`${formatDate(nextDay)}T${dutyEndTime}`));
+            }
+            const flightTime = parseFloat(flightTimeHours);
+            const numFlights = parseInt(numFlightsInDuty, 10);
+            const dutyPeriodHours = (dutyEndTimestamp.toMillis() - dutyStartTimestamp.toMillis()) / (1000 * 60 * 60);
+
+            const newEntry = {
+              dutyStartTimestamp,
+              dutyEndTimestamp,
+              flightTimeHours: flightTime,
+              dutyPeriodHours: parseFloat(dutyPeriodHours.toFixed(2)),
+              numFlightsInDuty: numFlights, 
+              createdAt: Timestamp.now(),
+              details: "Manual Entry"
+            };
+
+            await processAndStoreFlightEntry(newEntry, currentPilotId, 'manual');
+            setShowDutyModal(false);
+            setIsLoading(false);
+          };
+          
+          const handleViewDetails = async (flightId) => {
+              if (!flightId) { return; }
+              setIsApiLoading(true);
+              setSelectedFlightDetails(null); 
+              setShowDetailsModal(true); 
+              
+              const endpoint = `${API_BASE_URL}/api/flight-details/${flightId}`;
+              try {
+                  const response = await fetch(endpoint);
+                  const data = await response.json();
+                  if(!response.ok) throw new Error(data.details || data.message || "Failed to fetch details");
+                  setSelectedFlightDetails(data);
+              } catch (err) {
+                  setError(`Could not fetch details for flight ${flightId}: ${err.message}`);
+                  setSelectedFlightDetails({ error: `Could not fetch details. ${err.message}` });
+              } finally {
+                  setIsApiLoading(false);
+              }
+          };
 
           const handleLegalityCheck = async () => {
             const { collection, getDocs, query: firestoreQuery } = window.firebase;
@@ -387,43 +549,31 @@
               
               <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
                 <h2 className="text-xl font-semibold text-center text-sky-400">Proposed Flight Legality Check</h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-                    <div>
-                        <label className="block text-sm font-medium text-slate-300">Pilot</label>
-                        <select value={currentPilotId} onChange={(e) => { setCurrentPilotId(e.target.value); setLegalityResult(null); }} className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg block w-full p-2.5 shadow-inner" disabled={isCheckingLegality}>
-                            {pilots.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-300">Proposed Date</label>
-                        <input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg block w-full p-2.5 shadow-inner"/>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-300">Proposed Start</label>
-                        <input type="time" value={proposedStartTime} onChange={e => setProposedStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg block w-full p-2.5 shadow-inner"/>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-slate-300">Proposed End</label>
-                        <input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg block w-full p-2.5 shadow-inner"/>
-                    </div>
-                    <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isCheckingLegality || !currentPilotId}>
-                        {isCheckingLegality ? 'Checking...' : 'Check Legality'}
-                    </button>
-                </div>
-                {legalityResult && (
-                    <div className="mt-4 p-4 bg-slate-900/70 rounded-lg">
-                        <h3 className="font-bold text-lg mb-2">Legality Check Results:</h3>
-                        <ul className="space-y-1">
-                            {legalityResult.map((res, index) => (
-                                <li key={index} className={`flex justify-between p-2 rounded-md ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
-                                    <span className="font-semibold">{res.check}:</span>
-                                    <span>{res.details}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                )}
+                {/* ... Legality check UI */}
               </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
+                  <h2 className="text-xl font-semibold mb-4 text-sky-400">Manage Pilots</h2>
+                  {/* ... Pilot management UI */}
+                </div>
+                <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
+                  <h2 className="text-xl font-semibold mb-4 text-sky-400">Sync Flights from API</h2>
+                  {/* ... API sync UI */}
+                </div>
+              </div>
+              
+              <div className="text-center mb-6">
+                <button onClick={() => setShowDutyModal(true)} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg" disabled={!currentPilotId}>
+                  Log New Duty Manually for Selected Pilot
+                </button>
+              </div>
+              
+              <div className="mt-8">
+                 <h2 className="text-2xl font-semibold mb-4 text-sky-400">Flight Duty Log for: <span className="font-bold">{pilots.find(p => p.id === currentPilotId)?.name || '...'}</span></h2>
+                 {/* ... Flight log table UI ... */}
+              </div>
+
+              {/* ... All Modals (Details, Add Pilot, Add Duty) */}
             </div>
           );
         }
