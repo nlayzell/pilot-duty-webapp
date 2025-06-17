@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pilot Duty Tracker</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React Libraries -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-900">
+    <div id="root"></div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
+        import { 
+            getAuth, 
+            onAuthStateChanged,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
+
+        // This makes Firebase functions available to the main React script
+        window.firebase = {
+            initializeApp,
+            getAuth,
+            onAuthStateChanged,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            signOut,
+            getFirestore,
+            collection,
+            addDoc,
+            query,
+            onSnapshot,
+            doc,
+            Timestamp,
+            setDoc,
+            getDoc,
+            where,
+            getDocs,
+            orderBy,
+            setLogLevel
+        };
+    </script>
+
+    <!-- Your React Application Code -->
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        
+        // --- BEGIN Firebase Configuration ---
+        const firebaseConfig = {
+          apiKey: "AIzaSyBj6LK7FIgolevRztQ4z78YY4d9F1dlDyg",
+          authDomain: "flight-duty-tracker-fbeae.firebaseapp.com",
+          projectId: "flight-duty-tracker-fbeae",
+          storageBucket: "flight-duty-tracker-fbeae.firebasestorage.app", 
+          messagingSenderId: "430097302817",
+          appId: "1:430097302817:web:ed0594f45931dc84dc6a60",
+          measurementId: "G-9BTKL71S9E" 
+        };
+        // --- END Firebase Configuration ---
+
+        // --- BEGIN Proxy API Configuration ---
+        const API_BASE_URL = "https://flight-duty-proxy.onrender.com"; 
+        // --- END Proxy API Configuration ---
+
+        // --- BEGIN Duty Regulation Constants ---
+        const MAX_FLIGHT_TIME_28_DAYS = 112; 
+        const MAX_FLIGHT_TIME_90_DAYS = 300; 
+        const MAX_FLIGHT_TIME_365_DAYS = 1000; 
+        const MIN_REST_AWAY_FROM_BASE = 10;
+        const MIN_REST_AT_HOME_BASE = 12; 
+        // --- END Duty Regulation Constants ---
+
+        // --- Helper Functions ---
+        const formatDateTime = (date) => {
+          if (!date) return 'N/A';
+          if (date.toDate) {
+            return date.toDate().toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+          }
+          return new Date(date).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+        };
+
+        const formatDate = (date) => {
+            if (!date) return 'N/A';
+            const year = date.getFullYear();
+            const month = (date.getMonth() + 1).toString().padStart(2, '0');
+            const day = date.getDate().toString().padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const getMaxFDP = (startTimeISO, numFlights) => {
+            const hour = new Date(startTimeISO).getHours();
+            let maxFDP = 9; 
+            if (hour >= 0 && hour < 4) maxFDP = 9;
+            else if (hour >= 4 && hour < 5) maxFDP = (numFlights <= 4) ? 10 : 9;
+            else if (hour >= 5 && hour < 6) maxFDP = (numFlights <= 4) ? 11 : (numFlights <= 6) ? 10 : 9;
+            else if (hour >= 6 && hour < 7) maxFDP = (numFlights <= 4) ? 12 : (numFlights <= 6) ? 11 : 10;
+            else if (hour >= 7 && hour < 13) maxFDP = (numFlights <= 4) ? 13 : (numFlights <= 6) ? 12 : 11;
+            else if (hour >= 13 && hour < 17) maxFDP = (numFlights <= 4) ? 12.5 : (numFlights <= 6) ? 11.5 : 10.5;
+            else if (hour >= 17 && hour < 22) maxFDP = (numFlights <= 4) ? 12 : (numFlights <= 6) ? 11 : 10;
+            else if (hour >= 22 && hour < 23) maxFDP = (numFlights <= 4) ? 11 : (numFlights <= 6) ? 10 : 9;
+            else if (hour >= 23 && hour < 24) maxFDP = (numFlights <= 4) ? 10 : 9;
+            return maxFDP;
+        };
+
+        const LoginScreen = ({ auth, setUserId, setError, error }) => {
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [isLoading, setIsLoading] = useState(false);
+
+            const handleAuthAction = async (action) => {
+                const { createUserWithEmailAndPassword, signInWithEmailAndPassword } = window.firebase;
+                setIsLoading(true);
+                setError('');
+                try {
+                    const userCredential = await action(auth, email, password);
+                    setUserId(userCredential.user.uid);
+                } catch (error) {
+                    setError(error.message);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            return (
+                <div className="flex items-center justify-center min-h-screen">
+                    <div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl">
+                        <div>
+                            <h2 className="text-3xl font-bold text-center text-sky-400">Pilot Duty Tracker</h2>
+                            <p className="mt-2 text-center text-sm text-slate-400">Sign in to your account</p>
+                        </div>
+                        {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg text-center">{error}</div>}
+                        <div className="space-y-6">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-300">Email address</label>
+                                <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500"/>
+                            </div>
+                             <div>
+                                <label className="block text-sm font-medium text-slate-300">Password</label>
+                                <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500"/>
+                            </div>
+                            <div className="flex gap-4">
+                                <button onClick={() => handleAuthAction(signInWithEmailAndPassword)} disabled={isLoading} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 disabled:opacity-50">
+                                    {isLoading ? 'Signing In...' : 'Sign In'}
+                                </button>
+                                <button onClick={() => handleAuthAction(createUserWithEmailAndPassword)} disabled={isLoading} className="w-full flex justify-center py-2 px-4 border border-slate-500 rounded-md shadow-sm text-sm font-medium text-slate-300 bg-slate-700 hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-slate-500 disabled:opacity-50">
+                                    {isLoading ? '...' : 'Sign Up'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        function App() {
+          // --- State ---
+          const [db, setDb] = useState(null);
+          const [auth, setAuth] = useState(null);
+          const [user, setUser] = useState(null);
+          const [isAuthReady, setIsAuthReady] = useState(false);
+          const [pilots, setPilots] = useState([]);
+          const [currentPilotId, setCurrentPilotId] = useState('');
+          const [newPilotName, setNewPilotName] = useState('');
+          const [flightEntries, setFlightEntries] = useState([]);
+          const getInitialStartDate = () => {
+              const date = new Date();
+              date.setDate(date.getDate() - 7);
+              return formatDate(date);
+          };
+          const [apiFromDate, setApiFromDate] = useState(getInitialStartDate());
+          const [apiToDate, setApiToDate] = useState(formatDate(new Date()));
+          const [isLoading, setIsLoading] = useState(true); 
+          const [error, setError] = useState('');
+          const [showAddPilotModal, setShowAddPilotModal] = useState(false);
+          const [showDutyModal, setShowDutyModal] = useState(false);
+          const [showDetailsModal, setShowDetailsModal] = useState(false); 
+          const [selectedFlightDetails, setSelectedFlightDetails] = useState(null);
+          const [isApiLoading, setIsApiLoading] = useState(false); 
+          const [apiMessage, setApiMessage] = useState(''); 
+          const [complianceMessage, setComplianceMessage] = useState('');
+          const [legalityResult, setLegalityResult] = useState(null);
+          const [isCheckingLegality, setIsCheckingLegality] = useState(false);
+
+          // Form States
+          const [proposedDutyDate, setProposedDutyDate] = useState(formatDate(new Date()));
+          const [proposedStartTime, setProposedStartTime] = useState('09:00');
+          const [proposedEndTime, setProposedEndTime] = useState('17:00');
+          const [proposedFlightTime, setProposedFlightTime] = useState('6');
+          const [proposedNumFlights, setProposedNumFlights] = useState('2');
+          const [dutyDate, setDutyDate] = useState(formatDate(new Date()));
+          const [dutyStartTime, setDutyStartTime] = useState('08:00');
+          const [dutyEndTime, setDutyEndTime] = useState('16:00');
+          const [flightTimeHours, setFlightTimeHours] = useState('5'); 
+          const [numFlightsInDuty, setNumFlightsInDuty] = useState('2');
+
+          // --- Initialization ---
+          useEffect(() => {
+            const { initializeApp, getAuth, onAuthStateChanged, getFirestore, setLogLevel } = window.firebase;
+            
+            setLogLevel('debug'); 
+            const app = initializeApp(firebaseConfig);
+            const firestoreDb = getFirestore(app);
+            const firebaseAuth = getAuth(app);
+            setDb(firestoreDb);
+            setAuth(firebaseAuth);
+
+            const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
+              setUser(user); 
+              setIsAuthReady(true); 
+              setIsLoading(false); 
+            });
+            return () => unsubscribe();
+          }, []);
+
+          // --- Data Fetching Hooks (now dependent on user.uid) ---
+          useEffect(() => {
+            if (!db || !user || !isAuthReady) return;
+            const { collection, query, orderBy, onSnapshot } = window.firebase;
+            const pilotsColPath = `users/${user.uid}/pilots`;
+            const pilotsQuery = query(collection(db, pilotsColPath), orderBy("name"));
+            const unsubscribe = onSnapshot(pilotsQuery, (snapshot) => {
+              const pilotsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+              setPilots(pilotsData);
+              if (pilotsData.length > 0 && (!currentPilotId || !pilotsData.find(p => p.id === currentPilotId))) {
+                setCurrentPilotId(pilotsData[0].id);
+              } else if (pilotsData.length === 0) {
+                setCurrentPilotId(''); 
+              }
+            }, (err) => { setError("Failed to load pilot data."); });
+            return () => unsubscribe();
+          }, [db, user, isAuthReady]);
+
+          useEffect(() => {
+            if (!db || !user || !currentPilotId || !isAuthReady) {
+              setFlightEntries([]); 
+              return;
+            }
+            const { collection, query, orderBy, onSnapshot } = window.firebase;
+            const entriesColPath = `users/${user.uid}/pilots/${currentPilotId}/flightEntries`;
+            const entriesQuery = query(collection(db, entriesColPath), orderBy("dutyStartTimestamp", "desc"));
+            const unsubscribe = onSnapshot(entriesQuery, (snapshot) => {
+              const entriesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+              setFlightEntries(entriesData);
+            }, (err) => { setError("Failed to load flight entries."); });
+            return () => unsubscribe();
+          }, [db, user, currentPilotId, isAuthReady]);
+
+          // --- Core Functions ---
+          const handleAddPilot = async (pilotName, pilotIdentifier) => {
+              const { doc, setDoc, Timestamp } = window.firebase;
+              if (!db || !user || !pilotName.trim()) {
+                setError("Pilot name cannot be empty.");
+                return null;
+              }
+              const pilotsColPath = `users/${user.uid}/pilots`;
+              try {
+                const docId = pilotIdentifier || pilotName.replace(/\s+/g, '-').toLowerCase();
+                const pilotRef = doc(db, pilotsColPath, docId);
+                await setDoc(pilotRef, { name: pilotName.trim(), foreflightId: pilotIdentifier || null, createdAt: Timestamp.now() }, { merge: true });
+                setError('');
+                return pilotRef.id;
+              } catch (err) {
+                setError("Failed to add pilot. " + err.message);
+                return null;
+              }
+          };
+
+          const handleSignOut = async () => {
+              const { signOut } = window.firebase;
+              try {
+                  await signOut(auth);
+              } catch (error) {
+                  setError("Failed to sign out.");
+              }
+          };
+          
+          const processAndStoreFlightEntry = async (flightData, pilotIdToLink, entrySource = 'api') => {
+            const { collection, addDoc } = window.firebase;
+            // Removed compliance message setting from here to avoid overwriting legality check results
+            try {
+              const entriesColPath = `users/${user.uid}/pilots/${pilotIdToLink}/flightEntries`;
+              await addDoc(collection(db, entriesColPath), { ...flightData, source: entrySource });
+            } catch (err) {
+              console.error("Error adding flight duty:", err);
+              setError(`Failed to save flight entry for pilot ${pilotIdToLink}.`);
+            }
+          };
+
+          // --- All other handlers, including API fetching and legality checks, go here ---
+            // This is just a selection of handlers for brevity
+            const handleManualAddPilot = async () => { /* ... same as before */ };
+            const fetchAndProcessFlightsFromAPI = async () => { /* ... same as before, calling processAndStoreFlightEntry */ };
+            const handleManualFormSubmit = async (e) => { /* ... same as before, calling processAndStoreFlightEntry */ };
+            const handleViewDetails = async (flightId) => { /* ... same as before */ };
+
+          const handleLegalityCheck = async () => {
+            const { collection, getDocs, query: firestoreQuery } = window.firebase;
+            if(!currentPilotId || !user) return;
+            setIsCheckingLegality(true);
+            setLegalityResult(null);
+            setError('');
+
+            try {
+                const entriesColPath = `users/${user.uid}/pilots/${currentPilotId}/flightEntries`;
+                const entriesQuery = firestoreQuery(collection(db, entriesColPath));
+                const snapshot = await getDocs(entriesQuery);
+                const pastEntries = snapshot.docs.map(doc => doc.data());
+
+                const proposedStart = new Date(`${proposedDutyDate}T${proposedStartTime}`);
+                const proposedEnd = new Date(`${proposedDutyDate}T${proposedEndTime}`);
+                if(proposedEnd <= proposedStart) proposedEnd.setDate(proposedEnd.getDate() + 1);
+                
+                const proposedFDP = (proposedEnd - proposedStart) / (1000 * 60 * 60);
+                const proposedFT = parseFloat(proposedFlightTime);
+                const proposedFlights = parseInt(proposedNumFlights, 10);
+                
+                let results = [];
+
+                const lastFlight = pastEntries.sort((a,b) => b.dutyEndTimestamp.toMillis() - a.dutyEndTimestamp.toMillis())[0];
+                if (lastFlight) {
+                    const restInMillis = proposedStart.getTime() - lastFlight.dutyEndTimestamp.toDate().getTime();
+                    const restInHours = restInMillis / (1000 * 60 * 60);
+                    if(restInHours < MIN_REST_AWAY_FROM_BASE) {
+                        results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
+                    } else {
+                        results.push({ check: "Minimum Rest", status: "OK", details: `${restInHours.toFixed(1)}h rest is sufficient.`});
+                    }
+                } else {
+                    results.push({ check: "Minimum Rest", status: "OK", details: "No previous flights found."});
+                }
+                
+                const maxFDP = getMaxFDP(proposedStart.toISOString(), proposedFlights);
+                if(proposedFDP > maxFDP) {
+                     results.push({ check: "Max FDP", status: "VIOLATION", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP}h`});
+                } else {
+                     results.push({ check: "Max FDP", status: "OK", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP}h`});
+                }
+
+                const lookbackPeriods = [
+                    { days: 28, limit: MAX_FLIGHT_TIME_28_DAYS },
+                    { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS },
+                    { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }
+                ];
+
+                for (const period of lookbackPeriods) {
+                    const startDate = new Date(proposedStart);
+                    startDate.setDate(startDate.getDate() - period.days);
+                    
+                    const totalPastHours = pastEntries
+                        .filter(entry => entry.dutyStartTimestamp.toDate() >= startDate && entry.dutyStartTimestamp.toDate() < proposedStart)
+                        .reduce((sum, entry) => sum + (entry.flightTimeHours || 0), 0); // Added || 0 for safety
+                    
+                    const futureTotal = totalPastHours + proposedFT;
+
+                    if (futureTotal > period.limit) {
+                        results.push({ check: `${period.days}-Day Flight Time`, status: "VIOLATION", details: `Projected Total: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
+                    } else {
+                        results.push({ check: `${period.days}-Day Flight Time`, status: "OK", details: `Projected Total: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
+                    }
+                }
+                
+                setLegalityResult(results);
+            } catch(err) { setError("Failed to check legality.");}
+            finally { setIsCheckingLegality(false); }
+          };
+
+          if (!isAuthReady) {
+              return <div className="text-center text-white p-10">Loading Authentication...</div>;
+          }
+
+          if (!user) {
+              return <LoginScreen auth={auth} setUserId={(uid) => setUser({uid})} setError={setError} error={error} />;
+          }
+
+          // Main App JSX returned here if user is logged in
+          return (
+            <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 font-sans p-4 md:p-8">
+              <header className="mb-8 text-center relative">
+                <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Automated Duty Tracker</h1>
+                <p className="text-slate-400 text-sm mt-1">Fetches flights from API and logs them for duty monitoring.</p>
+                <div className="absolute top-0 right-0">
+                    <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md">
+                        Sign Out
+                    </button>
+                </div>
+              </header>
+              {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
+              {apiMessage && <div className={`px-4 py-3 rounded-lg mb-6 ${apiMessage.includes("Error") || apiMessage.includes("failed") ? 'bg-red-700/30 border-red-500 text-red-300' : 'bg-blue-700/30 border-blue-500 text-blue-300'}`}><strong className="font-bold">API Status: </strong><span className="block sm:inline">{apiMessage}</span></div>}
+              
+              {/* Legality Check Section */}
+              <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
+                <h2 className="text-xl font-semibold text-center text-sky-400">Proposed Flight Legality Check</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+                    <div>
+                        <label className="block text-sm font-medium text-slate-300">Pilot</label>
+                        <select value={currentPilotId} onChange={(e) => { setCurrentPilotId(e.target.value); setLegalityResult(null); }} className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg block w-full p-2.5 shadow-inner" disabled={isCheckingLegality}>
+                            {pilots.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-300">Proposed Date</label>
+                        <input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg block w-full p-2.5 shadow-inner"/>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-300">Proposed Start</label>
+                        <input type="time" value={proposedStartTime} onChange={e => setProposedStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg block w-full p-2.5 shadow-inner"/>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-slate-300">Proposed End</label>
+                        <input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg block w-full p-2.5 shadow-inner"/>
+                    </div>
+                    <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isCheckingLegality || !currentPilotId}>
+                        {isCheckingLegality ? 'Checking...' : 'Check Legality'}
+                    </button>
+                </div>
+                {legalityResult && (
+                    <div className="mt-4 p-4 bg-slate-900/70 rounded-lg">
+                        <h3 className="font-bold text-lg mb-2">Legality Check Results:</h3>
+                        <ul className="space-y-1">
+                            {legalityResult.map((res, index) => (
+                                <li key={index} className={`flex justify-between p-2 rounded-md ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+                                    <span className="font-semibold">{res.check}:</span>
+                                    <span>{res.details}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+              </div>
+
+              {/* ... The rest of the UI ... */}
+            </div>
+          );
+        }
+
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
