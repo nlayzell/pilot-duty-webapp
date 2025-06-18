@@ -15,17 +15,15 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-auth.js";
-        import { getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
-
         window.firebase = {
-            initializeApp, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
-            getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel
+            initializeApp, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut
         };
     </script>
 
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
         
+        // --- Configuration ---
         const firebaseConfig = {
           apiKey: "AIzaSyBj6LK7FIgolevRztQ4z78YY4d9F1dlDyg",
           authDomain: "flight-duty-tracker-fbeae.firebaseapp.com",
@@ -40,6 +38,7 @@
         const MAX_FLIGHT_TIME_365_DAYS = 1000; 
         const MIN_REST_AWAY_FROM_BASE = 10;
 
+        // --- Helper Functions ---
         const formatDateTime = (dateString) => {
           if (!dateString) return 'N/A';
           return new Date(dateString).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
@@ -49,6 +48,20 @@
             const month = (date.getMonth() + 1).toString().padStart(2, '0');
             const day = date.getDate().toString().padStart(2, '0');
             return `${year}-${month}-${day}`;
+        };
+        const getMaxFDP = (startTimeISO, numFlights) => {
+            const hour = new Date(startTimeISO).getHours();
+            let maxFDP = 9; 
+            if (hour >= 0 && hour < 4) maxFDP = 9;
+            else if (hour >= 4 && hour < 5) maxFDP = (numFlights <= 4) ? 10 : 9;
+            else if (hour >= 5 && hour < 6) maxFDP = (numFlights <= 4) ? 11 : (numFlights <= 6) ? 10 : 9;
+            else if (hour >= 6 && hour < 7) maxFDP = (numFlights <= 4) ? 12 : (numFlights <= 6) ? 11 : 10;
+            else if (hour >= 7 && hour < 13) maxFDP = (numFlights <= 4) ? 13 : (numFlights <= 6) ? 12 : 11;
+            else if (hour >= 13 && hour < 17) maxFDP = (numFlights <= 4) ? 12.5 : (numFlights <= 6) ? 11.5 : 10.5;
+            else if (hour >= 17 && hour < 22) maxFDP = (numFlights <= 4) ? 12 : (numFlights <= 6) ? 11 : 10;
+            else if (hour >= 22 && hour < 23) maxFDP = (numFlights <= 4) ? 11 : (numFlights <= 6) ? 10 : 9;
+            else if (hour >= 23 && hour < 24) maxFDP = (numFlights <= 4) ? 10 : 9;
+            return maxFDP;
         };
 
         const LoginScreen = ({ auth, setError, error }) => {
@@ -136,7 +149,7 @@
           }, []);
           
           useEffect(() => {
-              if (allApiFlights.length > 0) {
+              if (allApiFlights.length > 0 && pilots.length > 0) {
                  const now = new Date();
                  const dashboardStats = pilots.map(pilot => {
                     const pilotHistory = allApiFlights.filter(flight => flight.crew?.some(c => c.crewId === pilot.id));
@@ -203,7 +216,8 @@
                       if (flight.crew) {
                           flight.crew.forEach(member => {
                               if (member.crewId && !pilotMap.has(member.crewId)) {
-                                  pilotMap.set(member.crewId, { id: member.crewId, name: member.crewId });
+                                  // Use crewId as name but provide a fallback if name isn't in API response
+                                  pilotMap.set(member.crewId, { id: member.crewId, name: member.name || member.crewId });
                               }
                           });
                       }
@@ -252,7 +266,7 @@
                   .map(f => ({ dutyEndTimestamp: new Date(f.flightLogTime?.timeIn || f.arrivalTime) }))
                   .sort((a,b) => b.dutyEndTimestamp.getTime() - a.dutyEndTimestamp.getTime())[0];
 
-                if (lastFlight && lastFlight.dutyEndTimestamp) {
+                if (lastFlight && lastFlight.dutyEndTimestamp instanceof Date && !isNaN(lastFlight.dutyEndTimestamp)) {
                     const restInHours = (proposedStart.getTime() - lastFlight.dutyEndTimestamp.getTime()) / (1000 * 60 * 60);
                     if(restInHours < MIN_REST_AWAY_FROM_BASE) {
                         results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
@@ -263,13 +277,6 @@
                     results.push({ check: "Minimum Rest", status: "OK", details: "No previous flights found for pilot."});
                 }
                 
-                const maxFDP = getMaxFDP(proposedStart.toISOString(), proposedFlights);
-                if(proposedFDP > maxFDP) {
-                     results.push({ check: "Max FDP", status: "VIOLATION", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP}h`});
-                } else {
-                     results.push({ check: "Max FDP", status: "OK", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP}h`});
-                }
-
                 const lookbackPeriods = [
                     { days: 28, limit: MAX_FLIGHT_TIME_28_DAYS },
                     { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS },
@@ -294,8 +301,12 @@
                 }
                 
                 setLegalityResult(results);
-            } catch(err) { setError("Failed to check legality.");}
-            finally { setIsCheckingLegality(false); }
+            } catch(err) { 
+                console.error("Legality Check Error:", err);
+                setError("Failed to check legality. An unexpected error occurred.");
+            } finally { 
+                setIsCheckingLegality(false); 
+            }
           };
 
           const handleGenerateNote = async () => {
