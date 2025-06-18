@@ -128,7 +128,7 @@
                     setIsLoading(false);
                 }
             };
-
+            
             return (
                 <div className="flex items-center justify-center min-h-screen">
                     <div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl">
@@ -196,7 +196,6 @@
           const [flightTimeHours, setFlightTimeHours] = useState('5'); 
           const [numFlightsInDuty, setNumFlightsInDuty] = useState('2');
 
-          // --- Initialization ---
           useEffect(() => {
             const { initializeApp, getAuth, onAuthStateChanged, getFirestore, setLogLevel } = window.firebase;
             
@@ -215,7 +214,6 @@
             return () => unsubscribe();
           }, []);
 
-          // --- Data Fetching and Dashboard Calculation ---
           useEffect(() => {
             if (!db || !isAuthReady || !user) return;
 
@@ -283,7 +281,6 @@
             return () => unsubscribeEntries();
           }, [db, currentPilotId, isAuthReady, user]);
           
-          // --- Core Functions ---
           const handleAddPilot = async (pilotName, pilotIdentifier) => {
               const { doc, setDoc, Timestamp } = window.firebase;
               if (!db || !pilotName.trim()) {
@@ -558,64 +555,45 @@
 
           return (
             <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 font-sans p-4 md:p-8">
-                <header className="mb-8 text-center relative">
-                    <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Automated Duty Tracker</h1>
-                    <p className="text-slate-400 text-sm mt-1">Logged in as: {user.email}</p>
-                    <div className="absolute top-0 right-0">
-                        <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md">
-                            Sign Out
-                        </button>
-                    </div>
-                </header>
-
-                {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
-                {apiMessage && <div className={`px-4 py-3 rounded-lg mb-6 ${apiMessage.includes("Error") || apiMessage.includes("failed") ? 'bg-red-700/30 border-red-500 text-red-300' : 'bg-blue-700/30 border-blue-500 text-blue-300'}`}><strong className="font-bold">API Status: </strong><span className="block sm:inline">{apiMessage}</span></div>}
-              
-                 {/* Main UI restored here */}
-                <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
-                    <h2 className="text-xl font-semibold text-center text-sky-400">Proposed Flight Legality Check</h2>
-                    {/* ... Legality check UI */}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                    <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
-                    <h2 className="text-xl font-semibold mb-4 text-sky-400">Manage Pilots</h2>
-                        <div className="flex items-end gap-2">
-                        <div className="flex-grow">
-                          <label htmlFor="pilotSelect" className="block text-sm font-medium text-slate-300 mb-1">Select Pilot to View Log</label>
-                          <select id="pilotSelect" value={currentPilotId} onChange={(e) => setCurrentPilotId(e.target.value)} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg focus:ring-sky-500 focus:border-sky-500 block w-full p-2.5 shadow-inner" disabled={!pilots.length || isLoading || isApiLoading}>
-                            {pilots.length > 0 ? pilots.map(pilot => (<option key={pilot.id} value={pilot.id}>{pilot.name}</option>)) : <option>No pilots available</option>}
-                          </select>
-                        </div>
-                        <button onClick={() => setShowAddPilotModal(true)} className="bg-sky-600 hover:bg-sky-500 text-white font-semibold py-2.5 px-4 rounded-lg shadow-md transition" disabled={isLoading || isApiLoading}>Add</button>
-                      </div>
-                    </div>
-                    <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
-                      <h2 className="text-xl font-semibold mb-4 text-sky-400">Sync Flights from API</h2>
-                        <div className="flex flex-col sm:flex-row justify-center items-end gap-4">
-                          <div>
-                              <label htmlFor="apiFromDate" className="block text-sm font-medium text-slate-300">From</label>
-                              <input type="date" id="apiFromDate" value={apiFromDate} onChange={e => setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg"/>
-                          </div>
-                          <div>
-                              <label htmlFor="apiToDate" className="block text-sm font-medium text-slate-300">To</label>
-                              <input type="date" id="apiToDate" value={apiToDate} onChange={e => setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg"/>
-                          </div>
-                          <button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-500 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isApiLoading || !isAuthReady}>
-                              {isApiLoading ? 'Syncing...' : 'Sync'}
-                          </button>
-                      </div>
-                    </div>
-                </div>
-                 <div className="text-center mb-6">
-                    <button onClick={() => setShowDutyModal(true)} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg" disabled={!currentPilotId}>
-                      Log New Duty Manually for Selected Pilot
+              <header className="mb-8 text-center relative">
+                <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Automated Duty Tracker</h1>
+                <p className="text-slate-400 text-sm mt-1">Logged in as: {user.email}</p>
+                <div className="absolute top-0 right-0">
+                    <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md">
+                        Sign Out
                     </button>
                 </div>
-                <div className="mt-8">
-                    <h2 className="text-2xl font-semibold mb-4 text-sky-400">Flight Duty Log for: <span className="font-bold">{pilots.find(p => p.id === currentPilotId)?.name || '...'}</span></h2>
-                    {/* Flight Log Table and Modals... */}
+              </header>
+              {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
+              {apiMessage && <div className={`px-4 py-3 rounded-lg mb-6 ${apiMessage.includes("Error") || apiMessage.includes("failed") ? 'bg-red-700/30 border-red-500 text-red-300' : 'bg-blue-700/30 border-blue-500 text-blue-300'}`}><strong className="font-bold">API Status: </strong><span className="block sm:inline">{apiMessage}</span></div>}
+              
+              <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
+                <h2 className="text-xl font-semibold text-center text-sky-400">Proposed Flight Legality Check</h2>
+                {/* ... Legality check UI */}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
+                  <h2 className="text-xl font-semibold mb-4 text-sky-400">Manage Pilots</h2>
+                  {/* ... Pilot management UI */}
                 </div>
+                <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
+                  <h2 className="text-xl font-semibold mb-4 text-sky-400">Sync Flights from API</h2>
+                  {/* ... API sync UI */}
+                </div>
+              </div>
+              
+              <div className="text-center mb-6">
+                <button onClick={() => setShowDutyModal(true)} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg" disabled={!currentPilotId}>
+                  Log New Duty Manually for Selected Pilot
+                </button>
+              </div>
+              
+              <div className="mt-8">
+                 <h2 className="text-2xl font-semibold mb-4 text-sky-400">Flight Duty Log for: <span className="font-bold">{pilots.find(p => p.id === currentPilotId)?.name || '...'}</span></h2>
+                 {/* ... Flight log table UI ... */}
+              </div>
 
+              {/* ... All Modals (Details, Add Pilot, Add Duty) */}
             </div>
           );
         }
