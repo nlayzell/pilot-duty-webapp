@@ -550,7 +550,7 @@
           }
 
           if (!user) {
-              return <LoginScreen auth={auth} setUserId={(uid) => setUser({uid})} setError={setError} error={error} />;
+              return <LoginScreen auth={auth} setError={setError} error={error} />;
           }
 
           return (
@@ -568,6 +568,44 @@
               {apiMessage && <div className={`px-4 py-3 rounded-lg mb-6 ${apiMessage.includes("Error") || apiMessage.includes("failed") ? 'bg-red-700/30 border-red-500 text-red-300' : 'bg-blue-700/30 border-blue-500 text-blue-300'}`}><strong className="font-bold">API Status: </strong><span className="block sm:inline">{apiMessage}</span></div>}
               
               <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
+                <h2 className="text-xl font-semibold text-center text-sky-400">Crew Status Dashboard</h2>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-slate-700">
+                        <thead className="bg-slate-700/50">
+                            <tr>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Pilot</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 28 Days</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 90 Days</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 365 Days</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-slate-800 divide-y divide-slate-700">
+                            {dashboardData.map(pilotStats => {
+                                const p28 = (pilotStats.total28 / MAX_FLIGHT_TIME_28_DAYS) * 100;
+                                const p90 = (pilotStats.total90 / MAX_FLIGHT_TIME_90_DAYS) * 100;
+                                const p365 = (pilotStats.total365 / MAX_FLIGHT_TIME_365_DAYS) * 100;
+
+                                const getColor = (percentage) => {
+                                    if (percentage > 90) return 'text-red-400';
+                                    if (percentage > 75) return 'text-yellow-400';
+                                    return 'text-green-400';
+                                };
+
+                                return (
+                                    <tr key={pilotStats.pilotId}>
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-slate-200">{pilotStats.name}</td>
+                                        <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p28)}`}>{pilotStats.total28.toFixed(1)} / {MAX_FLIGHT_TIME_28_DAYS}h</td>
+                                        <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p90)}`}>{pilotStats.total90.toFixed(1)} / {MAX_FLIGHT_TIME_90_DAYS}h</td>
+                                        <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p365)}`}>{pilotStats.total365.toFixed(1)} / {MAX_FLIGHT_TIME_365_DAYS}h</td>
+                                    </tr>
+                                )
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+              </div>
+
+              <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
                 <h2 className="text-xl font-semibold text-center text-sky-400">Proposed Flight Legality Check</h2>
                 {/* ... Legality check UI */}
               </div>
@@ -581,18 +619,15 @@
                   {/* ... API sync UI */}
                 </div>
               </div>
-              
               <div className="text-center mb-6">
                 <button onClick={() => setShowDutyModal(true)} className="bg-green-600 hover:bg-green-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg" disabled={!currentPilotId}>
                   Log New Duty Manually for Selected Pilot
                 </button>
               </div>
-              
               <div className="mt-8">
                  <h2 className="text-2xl font-semibold mb-4 text-sky-400">Flight Duty Log for: <span className="font-bold">{pilots.find(p => p.id === currentPilotId)?.name || '...'}</span></h2>
-                 {/* ... Flight log table UI ... */}
+                 {/* ... Flight log table UI */}
               </div>
-
               {/* ... All Modals (Details, Add Pilot, Add Duty) */}
             </div>
           );
