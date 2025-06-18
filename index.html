@@ -15,15 +15,17 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
+
         window.firebase = {
-            initializeApp, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut
+            initializeApp, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+            getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel
         };
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useCallback } = React;
         
-        // --- Configuration ---
         const firebaseConfig = {
           apiKey: "AIzaSyBj6LK7FIgolevRztQ4z78YY4d9F1dlDyg",
           authDomain: "flight-duty-tracker-fbeae.firebaseapp.com",
@@ -37,9 +39,7 @@
         const MAX_FLIGHT_TIME_90_DAYS = 300; 
         const MAX_FLIGHT_TIME_365_DAYS = 1000; 
         const MIN_REST_AWAY_FROM_BASE = 10;
-        const MIN_REST_AT_HOME_BASE = 12;
 
-        // --- Helper Functions ---
         const formatDateTime = (dateString) => {
           if (!dateString) return 'N/A';
           return new Date(dateString).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
