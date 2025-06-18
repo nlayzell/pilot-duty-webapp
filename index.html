@@ -310,16 +310,13 @@
               
               Based on the summary, provide a clear, one-paragraph recommendation or a note of caution for the scheduler.`;
 
-              const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
-              const payload = { contents: chatHistory };
-              const apiKey = "";
-              const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+              const endpoint = `${API_BASE_URL}/api/generate-briefing`;
 
               try {
-                  const response = await fetch(apiUrl, {
+                  const response = await fetch(endpoint, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(payload)
+                      body: JSON.stringify({ prompt })
                   });
                   const result = await response.json();
                   
@@ -334,7 +331,7 @@
                       throw new Error("Invalid response structure from Gemini API.");
                   }
               } catch (err) {
-                  console.error("Error calling Gemini API:", err);
+                  console.error("Error calling Gemini API via proxy:", err);
                   setError(`Failed to generate note: ${err.message}`);
               } finally {
                   setIsGeneratingNote(false);
