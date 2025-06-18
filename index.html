@@ -4,27 +4,25 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pilot Duty Tracker</title>
-    <!-- Tailwind CSS for styling -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React Libraries -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    <!-- Babel to compile JSX in the browser -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body class="bg-slate-900">
     <div id="root"></div>
 
-    <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
+
         window.firebase = {
             initializeApp, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
+            getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel
         };
     </script>
 
-    <!-- Your React Application Code -->
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
         
@@ -43,12 +41,12 @@
         const MAX_FLIGHT_TIME_365_DAYS = 1000; 
         const MIN_REST_AWAY_FROM_BASE = 10;
         const MIN_REST_AT_HOME_BASE = 12;
-        const MIN_SPLIT_DUTY_REST = 3; 
 
         // --- Helper Functions ---
-        const formatDateTime = (dateString) => {
-          if (!dateString) return 'N/A';
-          return new Date(dateString).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+        const formatDateTime = (date) => {
+          if (!date) return 'N/A';
+          if (date.toDate) return date.toDate().toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+          return new Date(date).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
         };
         const formatDate = (date) => {
             if (!date) return 'N/A';
@@ -140,13 +138,9 @@
           const [proposedEndTime, setProposedEndTime] = useState('17:00');
           const [proposedFlightTime, setProposedFlightTime] = useState('6');
           
-          const [isSplitDuty, setIsSplitDuty] = useState(false);
-          const [restStartTime, setRestStartTime] = useState('12:00');
-          const [restEndTime, setRestEndTime] = useState('16:00');
-          
-          const [pilotAirportICAO, setPilotAirportICAO] = useState('CYHM');
-          const [departureAirportICAO, setDepartureAirportICAO] = useState('CYVR');
-
+          // State for Gemini API feature
+          const [geminiNote, setGeminiNote] = useState('');
+          const [isGeneratingNote, setIsGeneratingNote] = useState(false);
 
           useEffect(() => {
             const { initializeApp, getAuth, onAuthStateChanged } = window.firebase;
@@ -175,6 +169,7 @@
             setPilots([]);
             setSelectedPilotId('');
             setLegalityResult(null);
+            setGeminiNote('');
 
             const endpoint = `${API_BASE_URL}/api/flights`;
             const fromDateUTC = new Date(apiFromDate).toISOString();
@@ -221,35 +216,13 @@
           };
           
           const handleLegalityCheck = async () => {
-            if(!selectedPilotId || !pilotAirportICAO || !departureAirportICAO) {
-              setError("Please select a pilot and enter both ICAO codes.");
-              return;
-            };
+            if(!selectedPilotId) return;
             setIsCheckingLegality(true);
             setLegalityResult(null);
+            setGeminiNote(''); // Clear previous note
             setError('');
 
             try {
-                // Fetch timezone info for both airports
-                const [pilotTzRes, departureTzRes] = await Promise.all([
-                    fetch(`${API_BASE_URL}/api/airport-info/${pilotAirportICAO}`),
-                    fetch(`${API_BASE_URL}/api/airport-info/${departureAirportICAO}`)
-                ]);
-
-                if (!pilotTzRes.ok || !departureTzRes.ok) {
-                    throw new Error("Could not fetch timezone information for one or more airports.");
-                }
-                
-                const pilotAirportInfo = await pilotTzRes.json();
-                const departureAirportInfo = await departureTzRes.json();
-                
-                const pilotTzOffset = parseFloat(pilotAirportInfo.tz_offset_gmt);
-                const departureTzOffset = parseFloat(departureAirportInfo.tz_offset_gmt);
-                
-                if (isNaN(pilotTzOffset) || isNaN(departureTzOffset)) {
-                    throw new Error("Invalid timezone data received from airport API.");
-                }
-
                 const pilotHistory = allApiFlights.filter(flight => 
                     flight.crew?.some(c => c.crewId === selectedPilotId)
                 );
@@ -263,14 +236,6 @@
                 const proposedFlights = 1; 
                 
                 let results = [];
-                let isAcclimatized = true;
-
-                if (Math.abs(pilotTzOffset - departureTzOffset) > 2) {
-                    isAcclimatized = false;
-                    results.push({ check: "Acclimatization", status: "WARNING", details: `Not Acclimatized (>${2}hr TZ diff).` });
-                } else {
-                    results.push({ check: "Acclimatization", status: "OK", details: "Pilot is acclimatized." });
-                }
 
                 const lastFlight = pilotHistory
                   .filter(f => f.flightLogTime?.timeIn || f.arrivalTime)
@@ -278,8 +243,7 @@
                   .sort((a,b) => b.dutyEndTimestamp.getTime() - a.dutyEndTimestamp.getTime())[0];
 
                 if (lastFlight && lastFlight.dutyEndTimestamp) {
-                    const restInMillis = proposedStart.getTime() - lastFlight.dutyEndTimestamp.getTime();
-                    const restInHours = restInMillis / (1000 * 60 * 60);
+                    const restInHours = (proposedStart.getTime() - lastFlight.dutyEndTimestamp.getTime()) / (1000 * 60 * 60);
                     if(restInHours < MIN_REST_AWAY_FROM_BASE) {
                         results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
                     } else {
@@ -289,37 +253,87 @@
                     results.push({ check: "Minimum Rest", status: "OK", details: "No previous flights found for pilot."});
                 }
                 
-                let maxFDP = getMaxFDP(proposedStart.toISOString(), proposedFlights);
-                if (!isAcclimatized) {
-                    maxFDP = Math.min(maxFDP, 11);
+                const maxFDP = getMaxFDP(proposedStart.toISOString(), proposedFlights);
+                if(proposedFDP > maxFDP) {
+                     results.push({ check: "Max FDP", status: "VIOLATION", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP}h`});
+                } else {
+                     results.push({ check: "Max FDP", status: "OK", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP}h`});
                 }
-                
-                if (isSplitDuty) {
-                    const breakStart = new Date(`${proposedDutyDate}T${restStartTime}`);
-                    let breakEnd = new Date(`${proposedDutyDate}T${restEndTime}`);
-                    if(breakEnd <= breakStart) breakEnd.setDate(breakEnd.getDate() + 1);
 
-                    const restDuration = (breakEnd - breakStart) / (1000 * 60 * 60);
-                    if (restDuration < MIN_SPLIT_DUTY_REST) {
-                         results.push({ check: "Split Duty Rest", status: "VIOLATION", details: `Rest of ${restDuration.toFixed(1)}h is less than the required ${MIN_SPLIT_DUTY_REST}h.` });
+                const lookbackPeriods = [
+                    { days: 28, limit: MAX_FLIGHT_TIME_28_DAYS },
+                    { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS },
+                    { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }
+                ];
+
+                for (const period of lookbackPeriods) {
+                    const startDate = new Date(proposedStart);
+                    startDate.setDate(startDate.getDate() - period.days);
+                    
+                    const totalPastHours = pilotHistory
+                        .filter(entry => new Date(entry.departureTime) >= startDate && new Date(entry.departureTime) < proposedStart)
+                        .reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
+                    
+                    const futureTotal = totalPastHours + proposedFT;
+
+                    if (futureTotal > period.limit) {
+                        results.push({ check: `${period.days}-Day Flight Time`, status: "VIOLATION", details: `Projected Total: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
                     } else {
-                        const extension = Math.min(3, restDuration * 0.5);
-                        maxFDP += extension;
-                        results.push({ check: "Split Duty Rest", status: "OK", details: `Sufficient rest (${restDuration.toFixed(1)}h). FDP extended by ${extension.toFixed(1)}h.` });
+                        results.push({ check: `${period.days}-Day Flight Time`, status: "OK", details: `Projected Total: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
                     }
                 }
                 
-                if(proposedFDP > maxFDP) {
-                     results.push({ check: "Max FDP", status: "VIOLATION", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP.toFixed(1)}h`});
-                } else {
-                     results.push({ check: "Max FDP", status: "OK", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP.toFixed(1)}h`});
-                }
-
-                // ... (cumulative checks would go here, same logic as before)
-                
                 setLegalityResult(results);
-            } catch(err) { setError(`Legality Check Error: ${err.message}`);}
+            } catch(err) { setError("Failed to check legality.");}
             finally { setIsCheckingLegality(false); }
+          };
+
+          const handleGenerateNote = async () => {
+              if (!legalityResult) {
+                  setError("Please run a legality check first.");
+                  return;
+              }
+              setIsGeneratingNote(true);
+              setGeminiNote('');
+              setError('');
+
+              const selectedPilot = pilots.find(p => p.id === selectedPilotId);
+              const summary = legalityResult.map(r => `- ${r.check}: ${r.status} (${r.details})`).join('\n');
+              const prompt = `Act as a flight dispatcher. Write a concise briefing note for a proposed duty for pilot ${selectedPilot?.name || 'N/A'}.
+              
+              Proposed Duty Details:
+              - Date: ${proposedDutyDate}
+              - Start Time: ${proposedStartTime}
+              - End Time: ${proposedEndTime}
+              
+              Legality Check Summary:
+              ${summary}
+              
+              Based on the summary, provide a clear, one-paragraph recommendation or a note of caution for the scheduler.`;
+
+              const chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+              const payload = { contents: chatHistory };
+              const apiKey = "";
+              const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+              try {
+                  const response = await fetch(apiUrl, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(payload)
+                  });
+                  const result = await response.json();
+                  if (result.candidates && result.candidates.length > 0 && result.candidates[0].content?.parts?.[0]?.text) {
+                      setGeminiNote(result.candidates[0].content.parts[0].text);
+                  } else {
+                      throw new Error("Invalid response structure from Gemini API.");
+                  }
+              } catch (err) {
+                  console.error("Error calling Gemini API:", err);
+                  setError("Failed to generate note from Gemini API.");
+              } finally {
+                  setIsGeneratingNote(false);
+              }
           };
 
           if (!isAuthReady) {
@@ -359,7 +373,7 @@
                           <input type="date" id="apiToDate" value={apiToDate} onChange={e => setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg"/>
                       </div>
                       <button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-500 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isApiLoading}>
-                          {isApiLoading ? 'Syncing...' : 'Sync Flights'}
+                          {isApiLoading ? 'Syncing...' : 'Sync Flights from API'}
                       </button>
                   </div>
                    {apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}
@@ -369,73 +383,50 @@
                 <div className="lg:col-span-1 space-y-6">
                     <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
                         <h2 className="text-xl font-semibold mb-4 text-sky-400">Select Pilot</h2>
-                         <select value={selectedPilotId} onChange={(e) => { setSelectedPilotId(e.target.value); setLegalityResult(null); }} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>
+                         <select value={selectedPilotId} onChange={(e) => { setSelectedPilotId(e.target.value); setLegalityResult(null); setGeminiNote('') }} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>
                             {pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync flights to populate pilots</option>}
                         </select>
                     </div>
 
                     <div className="p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
                         <h2 className="text-xl font-semibold text-sky-400">Propose Future Flight</h2>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="col-span-2">
-                                <label className="block text-sm font-medium text-slate-300">Date</label>
-                                <input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-slate-300">Duty Start</label>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-300">Date</label>
+                            <input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
+                        </div>
+                        <div className="flex gap-4">
+                            <div className="flex-1">
+                                <label className="block text-sm font-medium text-slate-300">Start Time</label>
                                 <input type="time" value={proposedStartTime} onChange={e => setProposedStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
                             </div>
-                             <div>
-                                <label className="block text-sm font-medium text-slate-300">Duty End</label>
+                             <div className="flex-1">
+                                <label className="block text-sm font-medium text-slate-300">End Time</label>
                                 <input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
                             </div>
-                             <div className="col-span-2">
-                                <label className="block text-sm font-medium text-slate-300">Flight Time (H)</label>
-                                <input type="number" value={proposedFlightTime} onChange={e => setProposedFlightTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                            </div>
-                             <div className="col-span-2 grid grid-cols-2 gap-4 pt-2 border-t border-slate-700/50">
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-300">Departure</label>
-                                    <input type="text" value={pilotAirportICAO} onChange={e => setPilotAirportICAO(e.target.value.toUpperCase())} placeholder="e.g., CYHM" className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md uppercase"/>
-                                </div>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-300">Destination</label>
-                                    <input type="text" value={departureAirportICAO} onChange={e => setDepartureAirportICAO(e.target.value.toUpperCase())} placeholder="e.g., CYVR" className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md uppercase"/>
-                                </div>
-                            </div>
-                        </div>
-                        <div className="pt-4 border-t border-slate-700/50">
-                            <label className="flex items-center space-x-3">
-                                <input type="checkbox" checked={isSplitDuty} onChange={e => setIsSplitDuty(e.target.checked)} className="h-5 w-5 rounded bg-slate-700 border-slate-500 text-sky-500 focus:ring-sky-500"/>
-                                <span className="text-slate-300 font-medium">Is this a Split Duty?</span>
-                            </label>
-                            {isSplitDuty && (
-                                <div className="grid grid-cols-2 gap-4 mt-4">
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-300">Rest Start</label>
-                                        <input type="time" value={restStartTime} onChange={e => setRestStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-300">Rest End</label>
-                                        <input type="time" value={restEndTime} onChange={e => setRestEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                                    </div>
-                                </div>
-                            )}
                         </div>
                          <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isCheckingLegality || !selectedPilotId}>
                             {isCheckingLegality ? 'Checking...' : 'Check Legality'}
                         </button>
                         {legalityResult && (
-                            <div className="mt-4 p-4 bg-slate-900/70 rounded-lg">
-                                <h3 className="font-bold text-lg mb-2">Legality Check Results:</h3>
+                            <div className="mt-4 pt-4 border-t border-slate-700/50">
+                                <h3 className="font-bold text-lg mb-2">Legality Results:</h3>
                                 <ul className="space-y-1">
                                     {legalityResult.map((res, index) => (
-                                        <li key={index} className={`flex justify-between items-center p-2 rounded-md ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : res.status === 'WARNING' ? 'bg-yellow-500/10 text-yellow-300' : 'bg-red-500/20 text-red-300'}`}>
+                                        <li key={index} className={`flex justify-between p-2 rounded-md ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
                                             <span className="font-semibold">{res.check}:</span>
-                                            <span className="text-right">{res.details}</span>
+                                            <span>{res.details}</span>
                                         </li>
                                     ))}
                                 </ul>
+                                <button onClick={handleGenerateNote} disabled={isGeneratingNote} className="w-full mt-4 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2.5 px-6 rounded-lg shadow-lg disabled:opacity-50">
+                                    {isGeneratingNote ? 'Generating...' : '✨ Generate Briefing Note'}
+                                </button>
+                            </div>
+                        )}
+                        {geminiNote && (
+                             <div className="mt-4 p-4 bg-slate-900/70 rounded-lg">
+                                <h3 className="font-bold text-lg mb-2 text-amber-400">AI Briefing Note:</h3>
+                                <p className="text-slate-300 whitespace-pre-wrap">{geminiNote}</p>
                             </div>
                         )}
                     </div>
