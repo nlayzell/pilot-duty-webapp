@@ -3,28 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pilot Duty Tracker</title>
+    <title>Pilot Operations Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-900">
+<body class="bg-slate-900 text-slate-200">
     <div id="root"></div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-auth.js";
-        import { getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
-
         window.firebase = {
-            initializeApp, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut,
-            getFirestore, collection, addDoc, query, onSnapshot, doc, Timestamp, setDoc, getDoc, where, getDocs, orderBy, setLogLevel
+            initializeApp, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut
         };
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
+        const { useState, useEffect } = React;
         
         // --- Configuration ---
         const firebaseConfig = {
@@ -43,40 +40,24 @@
         const MIN_REST_AT_HOME_BASE = 12;
 
         // --- Helper Functions ---
-        const formatDateTime = (date) => {
-          if (!date) return 'N/A';
-          if (date.toDate) return date.toDate().toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
-          return new Date(date).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+        const formatDateTime = (dateString) => {
+          if (!dateString) return 'N/A';
+          return new Date(dateString).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
         };
         const formatDate = (date) => {
-            if (!date) return 'N/A';
             const year = date.getFullYear();
             const month = (date.getMonth() + 1).toString().padStart(2, '0');
             const day = date.getDate().toString().padStart(2, '0');
             return `${year}-${month}-${day}`;
-        };
-        const getMaxFDP = (startTimeISO, numFlights) => {
-            const hour = new Date(startTimeISO).getHours();
-            let maxFDP = 9; 
-            if (hour >= 0 && hour < 4) maxFDP = 9;
-            else if (hour >= 4 && hour < 5) maxFDP = (numFlights <= 4) ? 10 : 9;
-            else if (hour >= 5 && hour < 6) maxFDP = (numFlights <= 4) ? 11 : (numFlights <= 6) ? 10 : 9;
-            else if (hour >= 6 && hour < 7) maxFDP = (numFlights <= 4) ? 12 : (numFlights <= 6) ? 11 : 10;
-            else if (hour >= 7 && hour < 13) maxFDP = (numFlights <= 4) ? 13 : (numFlights <= 6) ? 12 : 11;
-            else if (hour >= 13 && hour < 17) maxFDP = (numFlights <= 4) ? 12.5 : (numFlights <= 6) ? 11.5 : 10.5;
-            else if (hour >= 17 && hour < 22) maxFDP = (numFlights <= 4) ? 12 : (numFlights <= 6) ? 11 : 10;
-            else if (hour >= 22 && hour < 23) maxFDP = (numFlights <= 4) ? 11 : (numFlights <= 6) ? 10 : 9;
-            else if (hour >= 23 && hour < 24) maxFDP = (numFlights <= 4) ? 10 : 9;
-            return maxFDP;
         };
 
         const LoginScreen = ({ auth, setError, error }) => {
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
             const [isLoading, setIsLoading] = useState(false);
+            const { signInWithEmailAndPassword } = window.firebase;
 
             const handleLogin = async () => {
-                const { signInWithEmailAndPassword } = window.firebase;
                 setIsLoading(true);
                 setError('');
                 try {
@@ -92,7 +73,7 @@
                 <div className="flex items-center justify-center min-h-screen">
                     <div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl">
                         <div>
-                            <h2 className="text-3xl font-bold text-center text-sky-400">Pilot Duty Tracker</h2>
+                            <h2 className="text-3xl font-bold text-center text-sky-400">Pilot Operations Dashboard</h2>
                             <p className="mt-2 text-center text-sm text-slate-400">Please sign in</p>
                         </div>
                         {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg text-center">{error}</div>}
@@ -132,7 +113,8 @@
           const [error, setError] = useState('');
           const [legalityResult, setLegalityResult] = useState(null);
           const [isCheckingLegality, setIsCheckingLegality] = useState(false);
-          
+          const [dashboardData, setDashboardData] = useState([]);
+
           const [proposedDutyDate, setProposedDutyDate] = useState(formatDate(new Date()));
           const [proposedStartTime, setProposedStartTime] = useState('09:00');
           const [proposedEndTime, setProposedEndTime] = useState('17:00');
@@ -146,8 +128,10 @@
             const app = initializeApp(firebaseConfig);
             const firebaseAuth = getAuth(app);
             setAuth(firebaseAuth);
-            const unsubscribe = onAuthStateChanged(firebaseAuth, setUser);
-            setIsAuthReady(true);
+            const unsubscribe = onAuthStateChanged(firebaseAuth, (currentUser) => {
+                setUser(currentUser);
+                setIsAuthReady(true);
+            });
             return () => unsubscribe();
           }, []);
 
@@ -155,7 +139,7 @@
               const { signOut } = window.firebase;
               try {
                   await signOut(auth);
-              } catch (error) {
+              } catch (e) {
                   setError("Failed to sign out.");
               }
           };
@@ -232,7 +216,7 @@
                 
                 const proposedFDP = (proposedEnd - proposedStart) / (1000 * 60 * 60);
                 const proposedFT = parseFloat(proposedFlightTime);
-                const proposedFlights = 1; 
+                const proposedFlights = 1;
                 
                 let results = [];
 
@@ -299,15 +283,12 @@
               const selectedPilot = pilots.find(p => p.id === selectedPilotId);
               const summary = legalityResult.map(r => `- ${r.check}: ${r.status} (${r.details})`).join('\n');
               const prompt = `Act as a flight dispatcher. Write a concise briefing note for a proposed duty for pilot ${selectedPilot?.name || 'N/A'}.
-              
               Proposed Duty Details:
               - Date: ${proposedDutyDate}
               - Start Time: ${proposedStartTime}
               - End Time: ${proposedEndTime}
-              
               Legality Check Summary:
               ${summary}
-              
               Based on the summary, provide a clear, one-paragraph recommendation or a note of caution for the scheduler.`;
 
               const endpoint = `${API_BASE_URL}/api/generate-briefing`;
@@ -319,7 +300,6 @@
                       body: JSON.stringify({ prompt })
                   });
                   
-                  // Improved Error Handling
                   const contentType = response.headers.get("content-type");
                   if (!response.ok || !contentType || !contentType.includes("application/json")) {
                       const errorText = await response.text();
@@ -412,6 +392,10 @@
                                 <label className="block text-sm font-medium text-slate-300">End Time</label>
                                 <input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
                             </div>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-300">Proposed Flight Time (Hours)</label>
+                            <input type="number" value={proposedFlightTime} onChange={e => setProposedFlightTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
                         </div>
                          <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isCheckingLegality || !selectedPilotId}>
                             {isCheckingLegality ? 'Checking...' : 'Check Legality'}
