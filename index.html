@@ -318,10 +318,17 @@
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ prompt })
                   });
-                  const result = await response.json();
                   
-                  if (!response.ok || result.error) {
-                      console.error("Gemini API Error Response:", result);
+                  // Improved Error Handling
+                  const contentType = response.headers.get("content-type");
+                  if (!response.ok || !contentType || !contentType.includes("application/json")) {
+                      const errorText = await response.text();
+                      console.error("Proxy Server Error:", errorText);
+                      throw new Error("The proxy server returned an unexpected error. Please check the Render logs.");
+                  }
+
+                  const result = await response.json();
+                  if (result.error) {
                       throw new Error(result.error?.message || "Gemini API returned an error.");
                   }
 
