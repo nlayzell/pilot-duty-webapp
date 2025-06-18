@@ -394,7 +394,7 @@
                   </div>
                    {apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}
               </div>
-              
+
               <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl">
                 <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status Dashboard</h2>
                 <div className="overflow-x-auto">
@@ -408,7 +408,7 @@
                             </tr>
                         </thead>
                         <tbody className="bg-slate-800 divide-y divide-slate-700">
-                            {dashboardData.map(pilotStats => {
+                            {dashboardData.length > 0 ? dashboardData.map(pilotStats => {
                                 const p28 = (pilotStats.total28 / MAX_FLIGHT_TIME_28_DAYS) * 100;
                                 const p90 = (pilotStats.total90 / MAX_FLIGHT_TIME_90_DAYS) * 100;
                                 const p365 = (pilotStats.total365 / MAX_FLIGHT_TIME_365_DAYS) * 100;
@@ -427,7 +427,9 @@
                                         <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p365)}`}>{pilotStats.total365.toFixed(1)} / {MAX_FLIGHT_TIME_365_DAYS}h</td>
                                     </tr>
                                 )
-                            })}
+                            }) : (
+                                <tr><td colSpan="4" className="px-4 py-5 text-center text-slate-400 italic">No pilot data to display. Sync from API to populate.</td></tr>
+                            )}
                         </tbody>
                     </table>
                 </div>
