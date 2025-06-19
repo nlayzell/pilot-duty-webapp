@@ -86,7 +86,8 @@
             const [geminiNote, setGeminiNote] = useState('');
             const [isGeneratingNote, setIsGeneratingNote] = useState(false);
             const [fleetStates, setFleetStates] = useState([]);
-            const [isMapLoading, setIsMapLoading] = useState(true);
+            const [isMapLoading, setIsMapLoading] = useState(false); // Default to not loading
+            const [mapMessage, setMapMessage] = useState('Sync flights to see live fleet data.');
             const fleetMapRef = useRef(null);
             const markerRef = useRef({});
             const planeIcon = L.divIcon({
@@ -100,7 +101,6 @@
                     setIsAuthReady(true);
                     return; 
                 }
-
                 try {
                     const app = initializeApp(firebaseConfig);
                     const auth = getAuth(app);
@@ -110,19 +110,15 @@
                             setUser(currentUser);
                             setIsAuthReady(true);
                         } else {
-                            // No user, attempt sign-in
                             try {
                                 if (initialAuthToken) {
                                     await signInWithCustomToken(auth, initialAuthToken);
                                 } else {
-                                    // If no token, sign in anonymously by default
                                     await signInAnonymously(auth);
                                 }
                             } catch (e) {
                                 console.error("Initial sign-in failed:", e.code);
-                                // This is the fix: if custom token fails, fall back to anonymous sign-in.
                                 try {
-                                    console.log("Falling back to anonymous sign-in.");
                                     await signInAnonymously(auth);
                                 } catch (anonError) {
                                     console.error("Fallback anonymous sign-in also failed:", anonError);
@@ -151,24 +147,61 @@
             }, [allApiFlights, pilots]);
 
             const fetchFleetStates = async () => {
-                if (!allApiFlights.length) { setFleetStates([]); return; }
-                const uniqueFlights = []; const seenIcaos = new Set();
+                if (!allApiFlights.length) {
+                    setFleetStates([]);
+                    setMapMessage('Sync flights to see live fleet data.');
+                    return;
+                }
+                const uniqueFlights = [];
+                const seenIcaos = new Set();
                 const sortedFlights = [...allApiFlights].sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
-                for (const f of sortedFlights) { if (f.icao24 && f.callSign && !seenIcaos.has(f.icao24)) { uniqueFlights.push(f); seenIcaos.add(f.icao24); } }
-                if (!uniqueFlights.length) return;
+                for (const f of sortedFlights) {
+                    if (f.icao24 && f.callSign && !seenIcaos.has(f.icao24)) {
+                        uniqueFlights.push(f);
+                        seenIcaos.add(f.icao24);
+                    }
+                }
+
+                if (!uniqueFlights.length) {
+                    setMapMessage('No aircraft with trackable IDs found in the synced flight data.');
+                    return;
+                }
+
                 setIsMapLoading(true);
+                setMapMessage(`Searching for ${uniqueFlights.length} aircraft...`);
+                console.log(`Attempting to fetch live states for:`, uniqueFlights.map(f => ({callsign: f.callSign, icao24: f.icao24})));
+
                 try {
                     const promises = uniqueFlights.map(f => fetch(`${API_BASE_URL}/api/track/${f.callSign.trim()}`));
                     const responses = await Promise.allSettled(promises);
                     const states = [];
                     for (const res of responses) {
-                        if (res.status === 'fulfilled' && res.value.ok && res.value.headers.get("content-type")?.includes("application/json")) {
-                            const data = await res.value.json();
-                            if (data.states?.length) states.push(...data.states);
-                        } else { console.warn(`Failed to fetch state:`, res.reason || res.value.statusText); }
+                        if (res.status === 'fulfilled' && res.value.ok) {
+                            const contentType = res.value.headers.get("content-type");
+                            if (contentType && contentType.includes("application/json")) {
+                                const data = await res.value.json();
+                                if (data.states && data.states.length > 0) {
+                                    states.push(...data.states);
+                                }
+                            }
+                        } else {
+                            console.warn(`Failed to fetch state for a callsign:`, res.reason || res.value.statusText);
+                        }
                     }
+                    
                     setFleetStates(states);
-                } catch (err) { console.error("Error fetching fleet data:", err); } finally { setIsMapLoading(false); }
+                    if (states.length > 0) {
+                        setMapMessage(`${states.length} live aircraft found.`);
+                    } else {
+                        setMapMessage('No live aircraft detected from your synced list. They may not be currently flying.');
+                        console.log("No live states were found for any of the unique aircraft.");
+                    }
+                } catch (err) {
+                    console.error("Error fetching fleet data:", err);
+                    setMapMessage('An error occurred while fetching fleet data.');
+                } finally {
+                    setIsMapLoading(false);
+                }
             };
 
             useEffect(() => {
@@ -238,7 +271,19 @@
                     </header>
                     {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
                     
-                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Live Fleet Map</h2><div id="fleet-map">{isMapLoading && <div className="h-full flex items-center justify-center text-slate-400">Loading Map...</div>}</div></div>
+                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
+                        <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Live Fleet Map</h2>
+                        <div id="fleet-map" className="relative">
+                           {(isMapLoading || (fleetStates.length === 0 && mapMessage)) && (
+                                <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
+                                    <div className="bg-slate-900/80 text-white p-4 rounded-lg">
+                                        {isMapLoading ? 'Searching for live aircraft...' : mapMessage}
+                                    </div>
+                                </div>
+                           )}
+                        </div>
+                    </div>
+
                     <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold mb-4 text-sky-400 text-center">Sync Flight Data</h2><div className="flex flex-col sm:flex-row justify-center items-end gap-4"><div><label htmlFor="apiFromDate" className="block text-sm font-medium">From</label><input type="date" id="apiFromDate" value={apiFromDate} onChange={e=>setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 rounded-lg p-2"/></div><div><label htmlFor="apiToDate" className="block text-sm font-medium">To</label><input type="date" id="apiToDate" value={apiToDate} onChange={e=>setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 rounded-lg p-2"/></div><button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isApiLoading}>{isApiLoading?'Syncing...':'Sync Flights'}</button></div>{apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}</div>
                     <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status</h2><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50"><tr><th className="px-4 py-3 text-left text-xs font-medium uppercase">Pilot</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 28d</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 90d</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 365d</th></tr></thead><tbody className="divide-y divide-slate-700">{dashboardData.length > 0 ? dashboardData.map(s => { const p28=(s.total28/112)*100, p90=(s.total90/300)*100, p365=(s.total365/1000)*100; const c=p=>p>90?'text-red-400':p>75?'text-yellow-400':'text-green-400'; return (<tr key={s.pilotId} className="hover:bg-slate-800"><td className="px-4 py-4">{s.name}</td><td className={`px-4 py-4 ${c(p28)}`}>{s.total28.toFixed(1)}/112h</td><td className={`px-4 py-4 ${c(p90)}`}>{s.total90.toFixed(1)}/300h</td><td className={`px-4 py-4 ${c(p365)}`}>{s.total365.toFixed(1)}/1000h</td></tr>)}) : (<tr><td colSpan="4" className="p-5 text-center italic">No data. Sync from API.</td></tr>)}</tbody></table></div></div>
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
