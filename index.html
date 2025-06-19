@@ -108,17 +108,11 @@
           const [isApiLoading, setIsApiLoading] = useState(false);
           const [apiMessage, setApiMessage] = useState('Sync from the API to get started.');
           const [error, setError] = useState('');
-          const [legalityResult, setLegalityResult] = useState(null);
-          const [isCheckingLegality, setIsCheckingLegality] = useState(false);
           const [dashboardData, setDashboardData] = useState([]);
           
-          const [proposedDutyDate, setProposedDutyDate] = useState(formatDate(new Date()));
-          const [proposedStartTime, setProposedStartTime] = useState('09:00');
-          const [proposedEndTime, setProposedEndTime] = useState('17:00');
-          const [proposedFlightTime, setProposedFlightTime] = useState('6');
-          
-          const [geminiNote, setGeminiNote] = useState('');
-          const [isGeneratingNote, setIsGeneratingNote] = useState(false);
+          const [liveTrackingData, setLiveTrackingData] = useState(null);
+          const [showTrackingModal, setShowTrackingModal] = useState(false);
+          const [isTracking, setIsTracking] = useState(false);
 
           useEffect(() => {
             const { initializeApp, getAuth, onAuthStateChanged } = window.firebase;
@@ -175,8 +169,6 @@
             setAllApiFlights([]); 
             setPilots([]);
             setSelectedPilotId('');
-            setLegalityResult(null);
-            setGeminiNote('');
 
             const endpoint = `${API_BASE_URL}/api/flights`;
             const fromDateUTC = new Date(apiFromDate).toISOString();
@@ -221,136 +213,46 @@
               setIsApiLoading(false);
             }
           };
-          
-          const handleLegalityCheck = async () => {
-            if(!selectedPilotId) return;
-            setIsCheckingLegality(true);
-            setLegalityResult(null);
-            setGeminiNote(''); 
-            setError('');
 
-            try {
-                const pilotHistory = allApiFlights.filter(flight => 
-                    flight.crew?.some(c => c.crewId === selectedPilotId)
-                );
-
-                const proposedStart = new Date(`${proposedDutyDate}T${proposedStartTime}`);
-                let proposedEnd = new Date(`${proposedDutyDate}T${proposedEndTime}`);
-                if(proposedEnd <= proposedStart) proposedEnd.setDate(proposedEnd.getDate() + 1);
-                
-                const proposedFDP = (proposedEnd - proposedStart) / (1000 * 60 * 60);
-                const proposedFT = parseFloat(proposedFlightTime);
-                const proposedFlights = 1;
-                
-                let results = [];
-
-                const lastFlight = pilotHistory
-                  .filter(f => f.flightLogTime?.timeIn || f.arrivalTime)
-                  .map(f => new Date(f.flightLogTime?.timeIn || f.arrivalTime))
-                  .filter(d => !isNaN(d))
-                  .sort((a,b) => b.getTime() - a.getTime())[0];
-
-                if (lastFlight) {
-                    const restInHours = (proposedStart.getTime() - lastFlight.getTime()) / (1000 * 60 * 60);
-                    if(restInHours < MIN_REST_AWAY_FROM_BASE) {
-                        results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
-                    } else {
-                        results.push({ check: "Minimum Rest", status: "OK", details: `${restInHours.toFixed(1)}h rest is sufficient.`});
-                    }
-                } else {
-                    results.push({ check: "Minimum Rest", status: "OK", details: "No previous flights found for pilot."});
-                }
-                
-                const maxFDP = getMaxFDP(proposedStart.toISOString(), proposedFlights);
-                if(proposedFDP > maxFDP) {
-                     results.push({ check: "Max FDP", status: "VIOLATION", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP}h`});
-                } else {
-                     results.push({ check: "Max FDP", status: "OK", details: `Proposed FDP: ${proposedFDP.toFixed(1)}h, Max Allowed: ${maxFDP}h`});
-                }
-
-                const lookbackPeriods = [
-                    { days: 28, limit: MAX_FLIGHT_TIME_28_DAYS },
-                    { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS },
-                    { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }
-                ];
-
-                for (const period of lookbackPeriods) {
-                    const startDate = new Date(proposedStart);
-                    startDate.setDate(startDate.getDate() - period.days);
-                    
-                    const totalPastHours = pilotHistory
-                        .filter(entry => new Date(entry.departureTime) >= startDate && new Date(entry.departureTime) < proposedStart)
-                        .reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
-                    
-                    const futureTotal = totalPastHours + proposedFT;
-
-                    if (futureTotal > period.limit) {
-                        results.push({ check: `${period.days}-Day Flight Time`, status: "VIOLATION", details: `Projected Total: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
-                    } else {
-                        results.push({ check: `${period.days}-Day Flight Time`, status: "OK", details: `Projected Total: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
-                    }
-                }
-                
-                setLegalityResult(results);
-            } catch(err) { 
-                console.error("Legality Check Error:", err);
-                setError("Failed to check legality. An unexpected error occurred.");
-            } finally { 
-                setIsCheckingLegality(false); 
-            }
-          };
-
-          const handleGenerateNote = async () => {
-              if (!legalityResult) {
-                  setError("Please run a legality check first.");
+          const handleTrackLive = async (flight) => {
+              if (!flight || !flight.callSign) {
+                  setError("No callsign available for this flight to track.");
                   return;
               }
-              setIsGeneratingNote(true);
-              setGeminiNote('');
+              setIsTracking(true);
+              setLiveTrackingData(null);
+              setShowTrackingModal(true);
               setError('');
 
-              const selectedPilot = pilots.find(p => p.id === selectedPilotId);
-              const summary = legalityResult.map(r => `- ${r.check}: ${r.status} (${r.details})`).join('\n');
-              const prompt = `Act as a flight dispatcher. Write a concise briefing note for a proposed duty for pilot ${selectedPilot?.name || 'N/A'}.
-              Proposed Duty Details:
-              - Date: ${proposedDutyDate}
-              - Start Time: ${proposedStartTime}
-              - End Time: ${proposedEndTime}
-              Legality Check Summary:
-              ${summary}
-              Based on the summary, provide a clear, one-paragraph recommendation or a note of caution for the scheduler.`;
-
-              const endpoint = `${API_BASE_URL}/api/generate-briefing`;
-
               try {
-                  const response = await fetch(endpoint, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ prompt })
-                  });
-                  
-                  const contentType = response.headers.get("content-type");
-                  if (!response.ok || !contentType || !contentType.includes("application/json")) {
-                      const errorText = await response.text();
-                      console.error("Proxy Server Error:", errorText);
-                      throw new Error("The proxy server returned an unexpected error. Please check the Render logs.");
+                  const endpoint = `${API_BASE_URL}/api/track/${flight.callSign}`;
+                  const response = await fetch(endpoint);
+                  const data = await response.json();
+
+                  if (!response.ok) {
+                      throw new Error(data.details || data.message || "Failed to fetch tracking data.");
                   }
 
-                  const result = await response.json();
-                  if (result.error) {
-                      throw new Error(result.error?.message || "Gemini API returned an error.");
-                  }
-
-                  if (result.candidates && result.candidates.length > 0 && result.candidates[0].content?.parts?.[0]?.text) {
-                      setGeminiNote(result.candidates[0].content.parts[0].text);
+                  if (data.states && data.states.length > 0) {
+                      const flightState = data.states[0];
+                      setLiveTrackingData({
+                          callsign: flightState[1].trim(),
+                          origin: flightState[2],
+                          longitude: flightState[5],
+                          latitude: flightState[6],
+                          altitude: flightState[7] || 'N/A',
+                          on_ground: flightState[8],
+                          velocity: flightState[9] ? (flightState[9] * 1.94384).toFixed(0) + ' kts' : 'N/A', // m/s to knots
+                          vertical_rate: flightState[11] ? (flightState[11] * 196.85).toFixed(0) + ' fpm' : 'N/A' // m/s to fpm
+                      });
                   } else {
-                      throw new Error("Invalid response structure from Gemini API.");
+                      setLiveTrackingData({ error: "No live ADSB data found for this callsign." });
                   }
               } catch (err) {
-                  console.error("Error calling Gemini API via proxy:", err);
-                  setError(`Failed to generate note: ${err.message}`);
+                  console.error("Error tracking flight:", err);
+                  setLiveTrackingData({ error: `Could not track flight: ${err.message}` });
               } finally {
-                  setIsGeneratingNote(false);
+                  setIsTracking(false);
               }
           };
 
@@ -396,99 +298,14 @@
                   </div>
                    {apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}
               </div>
-
-              <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl">
-                <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status Dashboard</h2>
-                <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-slate-700">
-                        <thead className="bg-slate-700/50">
-                            <tr>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Pilot</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 28 Days</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 90 Days</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 365 Days</th>
-                            </tr>
-                        </thead>
-                        <tbody className="bg-slate-800 divide-y divide-slate-700">
-                            {dashboardData.length > 0 ? dashboardData.map(pilotStats => {
-                                const p28 = (pilotStats.total28 / MAX_FLIGHT_TIME_28_DAYS) * 100;
-                                const p90 = (pilotStats.total90 / MAX_FLIGHT_TIME_90_DAYS) * 100;
-                                const p365 = (pilotStats.total365 / MAX_FLIGHT_TIME_365_DAYS) * 100;
-                                const getColor = (percentage) => {
-                                    if (percentage > 90) return 'text-red-400';
-                                    if (percentage > 75) return 'text-yellow-400';
-                                    return 'text-green-400';
-                                };
-                                return (
-                                    <tr key={pilotStats.pilotId}>
-                                        <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-slate-200">{pilotStats.name}</td>
-                                        <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p28)}`}>{pilotStats.total28.toFixed(1)} / {MAX_FLIGHT_TIME_28_DAYS}h</td>
-                                        <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p90)}`}>{pilotStats.total90.toFixed(1)} / {MAX_FLIGHT_TIME_90_DAYS}h</td>
-                                        <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p365)}`}>{pilotStats.total365.toFixed(1)} / {MAX_FLIGHT_TIME_365_DAYS}h</td>
-                                    </tr>
-                                )
-                            }) : (
-                                <tr><td colSpan="4" className="px-4 py-5 text-center text-slate-400 italic">No pilot data to display. Sync from API to populate.</td></tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-              </div>
               
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-1 space-y-6">
                     <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
                         <h2 className="text-xl font-semibold mb-4 text-sky-400">Select Pilot</h2>
-                         <select value={selectedPilotId} onChange={(e) => { setSelectedPilotId(e.target.value); setLegalityResult(null); setGeminiNote('') }} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>
+                         <select value={selectedPilotId} onChange={(e) => setSelectedPilotId(e.target.value)} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>
                             {pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync flights to populate pilots</option>}
                         </select>
-                    </div>
-
-                    <div className="p-6 bg-slate-800 rounded-xl shadow-2xl space-y-4">
-                        <h2 className="text-xl font-semibold text-sky-400">Propose Future Flight</h2>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-300">Date</label>
-                            <input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                        </div>
-                        <div className="flex gap-4">
-                            <div className="flex-1">
-                                <label className="block text-sm font-medium text-slate-300">Start Time</label>
-                                <input type="time" value={proposedStartTime} onChange={e => setProposedStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                            </div>
-                             <div className="flex-1">
-                                <label className="block text-sm font-medium text-slate-300">End Time</label>
-                                <input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                            </div>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-slate-300">Proposed Flight Time (Hours)</label>
-                            <input type="number" value={proposedFlightTime} onChange={e => setProposedFlightTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                        </div>
-                         <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isCheckingLegality || !selectedPilotId}>
-                            {isCheckingLegality ? 'Checking...' : 'Check Legality'}
-                        </button>
-                        {legalityResult && (
-                            <div className="mt-4 pt-4 border-t border-slate-700/50">
-                                <h3 className="font-bold text-lg mb-2">Legality Results:</h3>
-                                <ul className="space-y-1">
-                                    {legalityResult.map((res, index) => (
-                                        <li key={index} className={`flex justify-between p-2 rounded-md ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
-                                            <span className="font-semibold">{res.check}:</span>
-                                            <span>{res.details}</span>
-                                        </li>
-                                    ))}
-                                </ul>
-                                <button onClick={handleGenerateNote} disabled={isGeneratingNote} className="w-full mt-4 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2.5 px-6 rounded-lg shadow-lg disabled:opacity-50">
-                                    {isGeneratingNote ? 'Generating...' : '✨ Generate Briefing Note'}
-                                </button>
-                            </div>
-                        )}
-                        {geminiNote && (
-                             <div className="mt-4 p-4 bg-slate-900/70 rounded-lg">
-                                <h3 className="font-bold text-lg mb-2 text-amber-400">AI Briefing Note:</h3>
-                                <p className="text-slate-300 whitespace-pre-wrap">{geminiNote}</p>
-                            </div>
-                        )}
                     </div>
                 </div>
 
@@ -502,8 +319,7 @@
                                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Call Sign</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Route</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Aircraft</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Block / Flight (H)</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Crew</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Actions</th>
                             </tr>
                             </thead>
                             <tbody className="bg-slate-800 divide-y divide-slate-700">
@@ -513,19 +329,47 @@
                                 <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.callSign || 'N/A'}</td>
                                 <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{flight.departure} {'->'} {flight.destination}</td>
                                 <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.aircraftRegistration}</td>
-                                <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">
-                                    {flight.flightLogTime?.block ? flight.flightLogTime.block.toFixed(1) : 'N/A'} / {flight.flightLogTime?.flight ? flight.flightLogTime.flight.toFixed(1) : 'N/A'}
+                                <td className="px-4 py-4 whitespace-nowrap text-sm">
+                                    <button onClick={() => handleTrackLive(flight)} className="text-sky-400 hover:text-sky-300 font-semibold" disabled={!flight.callSign}>Track Live</button>
                                 </td>
-                                <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.crew?.map(c => c.crewId.split('@')[0]).join(', ') || 'N/A'}</td>
                                 </tr>
                             )) : (
-                                <tr><td colSpan="6" className="px-4 py-5 text-center text-slate-400 italic">No flights to display for selected pilot.</td></tr>
+                                <tr><td colSpan="5" className="px-4 py-5 text-center text-slate-400 italic">No flights to display for selected pilot.</td></tr>
                             )}
                             </tbody>
                         </table>
                     </div>
                 </div>
               </div>
+              
+              {showTrackingModal && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                    <div className="bg-slate-800 p-6 rounded-xl shadow-2xl w-full max-w-lg">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-2xl font-semibold text-sky-400">Live Flight Tracking</h3>
+                            <button onClick={() => setShowTrackingModal(false)} className="text-slate-400 hover:text-slate-200 text-2xl font-bold">&times;</button>
+                        </div>
+                        {isTracking && <div className="text-center p-8">Searching for live ADSB data...</div>}
+                        {!isTracking && liveTrackingData && (
+                            <div className="space-y-2">
+                                {liveTrackingData.error ? (
+                                    <p className="text-yellow-400">{liveTrackingData.error}</p>
+                                ) : (
+                                    <div className="text-lg">
+                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Callsign:</strong> {liveTrackingData.callsign}</p>
+                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Status:</strong> {liveTrackingData.on_ground ? "On Ground" : "In Air"}</p>
+                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Latitude:</strong> {liveTrackingData.latitude}</p>
+                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Longitude:</strong> {liveTrackingData.longitude}</p>
+                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Altitude:</strong> {liveTrackingData.altitude} ft</p>
+                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Ground Speed:</strong> {liveTrackingData.velocity}</p>
+                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Vertical Rate:</strong> {liveTrackingData.vertical_rate}</p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+              )}
             </div>
           );
         }
