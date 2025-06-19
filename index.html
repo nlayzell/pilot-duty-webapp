@@ -9,59 +9,43 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    {/* Added Leaflet for mapping flight paths */}
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
     <style>
         body { font-family: 'Inter', sans-serif; }
-        /* Custom scrollbar for webkit browsers */
-        .custom-scrollbar::-webkit-scrollbar {
-            width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-            background: #1e293b; /* slate-800 */
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: #475569; /* slate-600 */
-            border-radius: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: #64748b; /* slate-500 */
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1e293b; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        
+        /* Style for the permanent fleet map container */
+        #fleet-map {
+            height: 450px; /* Or any desired height */
+            border-radius: 0.75rem; /* rounded-xl */
+            border: 1px solid #334155; /* slate-700 */
+            background-color: #1e293b; /* slate-800 */
         }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-200">
     <div id="root"></div>
 
-    <!-- 
-      Using ES6 modules to import Firebase.
-      This is a more modern approach than attaching to the window object.
-    -->
     <script type="module">
-        // These global variables are provided by the environment.
-        // __firebase_config contains your project's configuration.
-        // __initial_auth_token is used for secure, seamless authentication.
         const firebaseConfig = typeof __firebase_config !== 'undefined' 
-            ? JSON.parse(__firebase_config) 
-            : null;
-
+            ? JSON.parse(__firebase_config) : null;
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' 
-            ? __initial_auth_token 
-            : null;
-
-        // Make config and token available to the React component
+            ? __initial_auth_token : null;
         window.appConfig = { firebaseConfig, initialAuthToken };
-
-        // We will initialize Firebase inside the React app's useEffect hook.
-        // This ensures React has rendered before we attempt to use the DOM.
     </script>
 
-    <!-- 
-      Importing Firebase SDKs. Updated to a more recent version for better
-      performance and security.
-    -->
     <script type="text/babel" data-type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithCustomToken, signInAnonymously, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
-        const { useState, useEffect, useMemo } = React;
+        const { useState, useEffect, useMemo, useRef } = React;
 
         // --- Constants and Utility Functions ---
         const API_BASE_URL = "https://flight-duty-proxy.onrender.com";
@@ -85,112 +69,154 @@
             const [user, setUser] = useState(null);
             const [isAuthReady, setIsAuthReady] = useState(false);
             const [authInstance, setAuthInstance] = useState(null);
-            
             const [allApiFlights, setAllApiFlights] = useState([]);
             const [pilots, setPilots] = useState([]);
             const [selectedPilotId, setSelectedPilotId] = useState('');
-            
             const [apiFromDate, setApiFromDate] = useState(() => {
                 const date = new Date();
                 date.setDate(date.getDate() - 30);
                 return formatDate(date);
             });
             const [apiToDate, setApiToDate] = useState(formatDate(new Date()));
-            
             const [isApiLoading, setIsApiLoading] = useState(false);
             const [apiMessage, setApiMessage] = useState('Sync from the API to get started.');
             const [error, setError] = useState('');
-            
             const [legalityResult, setLegalityResult] = useState(null);
             const [isCheckingLegality, setIsCheckingLegality] = useState(false);
-            
             const [proposedDutyDate, setProposedDutyDate] = useState(formatDate(new Date()));
             const [proposedStartTime, setProposedStartTime] = useState('09:00');
             const [proposedEndTime, setProposedEndTime] = useState('17:00');
             const [proposedFlightTime, setProposedFlightTime] = useState('6');
-            
             const [geminiNote, setGeminiNote] = useState('');
             const [isGeneratingNote, setIsGeneratingNote] = useState(false);
 
-            const [liveTrackingData, setLiveTrackingData] = useState(null);
-            const [showTrackingModal, setShowTrackingModal] = useState(false);
-            const [isTracking, setIsTracking] = useState(false);
+            // State for fleet map
+            const [fleetStates, setFleetStates] = useState([]);
+            const [isMapLoading, setIsMapLoading] = useState(true);
+            
+            // Refs for map instance and markers
+            const fleetMapRef = useRef(null);
+            const markerRef = useRef({});
+            const planeIcon = L.divIcon({
+                html: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-sky-400"><path d="M2 21h20L12 2 2 21z" transform="rotate(-45 12 12)"></path></svg>`,
+                className: '',
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+            });
+
 
             // --- Effects ---
 
-            // Effect for Firebase Initialization and Authentication
             useEffect(() => {
                 const { firebaseConfig, initialAuthToken } = window.appConfig;
-
-                if (!firebaseConfig) {
-                    setError("Firebase configuration is missing. The app cannot start.");
-                    setIsAuthReady(true);
-                    return;
-                }
-
+                if (!firebaseConfig) { setError("Firebase configuration is missing."); setIsAuthReady(true); return; }
                 try {
                     const app = initializeApp(firebaseConfig);
                     const auth = getAuth(app);
                     setAuthInstance(auth);
-
                     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-                        if (currentUser) {
-                            setUser(currentUser);
-                        } else if (initialAuthToken) {
-                            // If there's a token, sign in with it.
-                            await signInWithCustomToken(auth, initialAuthToken);
-                        } else {
-                            // Fallback to anonymous sign-in if no token is available.
-                            await signInAnonymously(auth);
-                        }
+                        if (currentUser) setUser(currentUser);
+                        else if (initialAuthToken) await signInWithCustomToken(auth, initialAuthToken);
+                        else await signInAnonymously(auth);
                         setIsAuthReady(true);
                     });
-
-                    // Cleanup subscription on component unmount
                     return () => unsubscribe();
-                } catch (e) {
-                    console.error("Firebase Initialization Error:", e);
-                    setError("Could not initialize Firebase. Check console for details.");
-                    setIsAuthReady(true);
-                }
+                } catch (e) { console.error("Firebase Initialization Error:", e); setError("Could not initialize Firebase."); setIsAuthReady(true); }
             }, []);
             
-            // Effect for calculating dashboard summary data
             const dashboardData = useMemo(() => {
-                if (allApiFlights.length === 0 || pilots.length === 0) {
-                    return [];
-                }
+                if (allApiFlights.length === 0 || pilots.length === 0) return [];
                 const now = new Date();
                 return pilots.map(pilot => {
                     const pilotHistory = allApiFlights.filter(flight => flight.crew?.some(c => c.crewId === pilot.id));
                     const stats = { pilotId: pilot.id, name: pilot.name };
-                    const lookbackPeriods = [
-                        { days: 28, limit: MAX_FLIGHT_TIME_28_DAYS },
-                        { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS },
-                        { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }
-                    ];
+                    const lookbackPeriods = [{ days: 28, limit: MAX_FLIGHT_TIME_28_DAYS }, { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS }, { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }];
                     lookbackPeriods.forEach(period => {
                         const startDate = new Date(now);
                         startDate.setDate(now.getDate() - period.days);
-                        const totalHours = pilotHistory
-                            .filter(entry => new Date(entry.departureTime) >= startDate)
-                            .reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
+                        const totalHours = pilotHistory.filter(entry => new Date(entry.departureTime) >= startDate).reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
                         stats[`total${period.days}`] = totalHours;
                     });
                     return stats;
                 });
             }, [allApiFlights, pilots]);
-            
+
+            const fetchFleetStates = async () => {
+                setIsMapLoading(true);
+                try {
+                    // This assumes the proxy has an endpoint to get all states from OpenSky
+                    const response = await fetch(`${API_BASE_URL}/api/track/all`);
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.message || "Failed to fetch fleet states");
+                    setFleetStates(data.states || []);
+                } catch (err) {
+                    console.error("Failed to fetch fleet data:", err);
+                    // Don't show a blocking error for a background refresh failure
+                } finally {
+                    setIsMapLoading(false);
+                }
+            };
+
+            // Effect to initialize the fleet map and set up periodic refresh
+            useEffect(() => {
+                // This effect runs when auth state is ready.
+                // It ensures the #fleet-map div exists before L.map is called.
+                if (isAuthReady && user && !fleetMapRef.current) {
+                    const mapContainer = document.getElementById('fleet-map');
+                    if (mapContainer) {
+                        fleetMapRef.current = L.map('fleet-map').setView([30, 0], 2);
+                        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                            subdomains: 'abcd', maxZoom: 20
+                        }).addTo(fleetMapRef.current);
+                        
+                        fetchFleetStates(); 
+                        const intervalId = setInterval(fetchFleetStates, 60000); 
+                        
+                        return () => clearInterval(intervalId);
+                    }
+                }
+            }, [isAuthReady, user]);
+
+            // Effect to update aircraft markers on the map
+            useEffect(() => {
+                const map = fleetMapRef.current;
+                if (!map) return;
+
+                // Clear existing markers
+                Object.values(markerRef.current).forEach(marker => map.removeLayer(marker));
+                markerRef.current = {};
+
+                const knownIcaos = new Set(allApiFlights.map(f => f.icao24).filter(Boolean));
+                
+                if (fleetStates.length > 0) {
+                    fleetStates.forEach(state => {
+                        const icao24 = state[0];
+                        // Only display aircraft that are part of our synced fleet
+                        if (knownIcaos.has(icao24)) {
+                            const callsign = state[1]?.trim() || 'N/A';
+                            const longitude = state[5];
+                            const latitude = state[6];
+                            const altitude = state[7] ? `${Math.round(state[7] * 3.28084)} ft` : 'N/A';
+                            const velocity = state[9] ? `${(state[9] * 1.94384).toFixed(0)} kts` : 'N/A';
+
+                            if (latitude && longitude) {
+                                const marker = L.marker([latitude, longitude], { icon: planeIcon })
+                                    .addTo(map)
+                                    .bindPopup(`<b>${callsign}</b><br>ICAO: ${icao24}<br>Alt: ${altitude}<br>GS: ${velocity}`);
+                                markerRef.current[icao24] = marker;
+                            }
+                        }
+                    });
+                }
+            }, [fleetStates, allApiFlights]); // Rerun when fleet or synced flights change
+
+
             // --- Handlers ---
             const handleSignOut = async () => {
                 if (authInstance) {
-                    try {
-                        await signOut(authInstance);
-                        setUser(null); // Explicitly clear user state
-                    } catch (e) {
-                        setError("Failed to sign out.");
-                        console.error("Sign out error:", e);
-                    }
+                    try { await signOut(authInstance); setUser(null); } 
+                    catch (e) { setError("Failed to sign out."); console.error("Sign out error:", e); }
                 }
             };
             
@@ -209,42 +235,43 @@
                 const toDateUTC = new Date(new Date(apiToDate).setUTCHours(23, 59, 59, 999)).toISOString();
 
                 try {
-                    const response = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ fromDate: fromDateUTC, toDate: toDateUTC })
-                    });
+                    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fromDate: fromDateUTC, toDate: toDateUTC }) });
                     const responseData = await response.json();
                     if (!response.ok) throw new Error(responseData.details || responseData.message || 'Unknown proxy error');
                     
                     const flightsToProcess = responseData.flights || [];
-                    setAllApiFlights(flightsToProcess);
+                    setAllApiFlights(flightsToProcess); // This will trigger the map update effect
 
                     if (flightsToProcess.length > 0) {
                         const pilotMap = new Map();
                         flightsToProcess.forEach(flight => {
-                            if (flight.crew) {
-                                flight.crew.forEach(member => {
-                                    if (member.crewId && !pilotMap.has(member.crewId)) {
-                                        pilotMap.set(member.crewId, { id: member.crewId, name: member.name || member.crewId });
-                                    }
-                                });
-                            }
+                            if (flight.crew) flight.crew.forEach(member => { if (member.crewId && !pilotMap.has(member.crewId)) pilotMap.set(member.crewId, { id: member.crewId, name: member.name || member.crewId }); });
                         });
                         const uniquePilots = Array.from(pilotMap.values()).sort((a,b) => a.name.localeCompare(b.name));
                         setPilots(uniquePilots);
-                        if(uniquePilots.length > 0) {
-                            setSelectedPilotId(uniquePilots[0].id);
-                        }
+                        if(uniquePilots.length > 0) setSelectedPilotId(uniquePilots[0].id);
                         setApiMessage(`Successfully fetched ${flightsToProcess.length} flights.`);
                     } else {
-                        setApiMessage("Successfully fetched, but no flights found in the date range.");
+                        setApiMessage("No flights found in the date range.");
                     }
                 } catch (err) {
                     setApiMessage(`Error: ${err.message}`);
                     setError(`API Error: ${err.message}`);
                 } finally {
                     setIsApiLoading(false);
+                }
+            };
+            
+            const handleCenterOnAircraft = (icao24) => {
+                const map = fleetMapRef.current;
+                const marker = markerRef.current[icao24];
+                
+                if (map && marker) {
+                    map.setView(marker.getLatLng(), 8); // Zoom in
+                    marker.openPopup();
+                } else {
+                    setError(`Aircraft ${icao24} not found in current live data.`);
+                    setTimeout(() => setError(''), 5000); // Clear error after 5s
                 }
             };
 
@@ -254,79 +281,39 @@
                 setLegalityResult(null);
                 setGeminiNote(''); 
                 setError('');
-
                 try {
-                    const pilotHistory = allApiFlights.filter(flight => 
-                        flight.crew?.some(c => c.crewId === selectedPilotId)
-                    );
-
-                    const proposedStart = new Date(`${proposedDutyDate}T${proposedStartTime}:00Z`); // Assume UTC input
+                    const pilotHistory = allApiFlights.filter(flight => flight.crew?.some(c => c.crewId === selectedPilotId));
+                    const proposedStart = new Date(`${proposedDutyDate}T${proposedStartTime}:00Z`);
                     let proposedEnd = new Date(`${proposedDutyDate}T${proposedEndTime}:00Z`);
                     if(proposedEnd <= proposedStart) proposedEnd.setDate(proposedEnd.getDate() + 1);
-                    
                     const proposedFT = parseFloat(proposedFlightTime);
                     let results = [];
-
-                    const lastFlight = pilotHistory
-                        .map(f => new Date(f.flightLogTime?.timeIn || f.arrivalTime))
-                        .filter(d => !isNaN(d.getTime()))
-                        .sort((a,b) => b - a)[0];
-
+                    const lastFlight = pilotHistory.map(f => new Date(f.flightLogTime?.timeIn || f.arrivalTime)).filter(d => !isNaN(d.getTime())).sort((a,b) => b - a)[0];
                     if (lastFlight) {
                         const restInHours = (proposedStart.getTime() - lastFlight.getTime()) / (1000 * 60 * 60);
-                        if(restInHours < MIN_REST_AWAY_FROM_BASE) {
-                            results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
-                        } else {
-                            results.push({ check: "Minimum Rest", status: "OK", details: `${restInHours.toFixed(1)}h rest is sufficient.`});
-                        }
+                        if(restInHours < MIN_REST_AWAY_FROM_BASE) results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
+                        else results.push({ check: "Minimum Rest", status: "OK", details: `${restInHours.toFixed(1)}h rest is sufficient.`});
                     } else {
-                        results.push({ check: "Minimum Rest", status: "OK", details: "No recent flights found for pilot."});
+                        results.push({ check: "Minimum Rest", status: "OK", details: "No recent flights found."});
                     }
-                    
-                    const lookbackPeriods = [
-                        { days: 28, limit: MAX_FLIGHT_TIME_28_DAYS },
-                        { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS },
-                        { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }
-                    ];
-
+                    const lookbackPeriods = [{ days: 28, limit: MAX_FLIGHT_TIME_28_DAYS }, { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS }, { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }];
                     for (const period of lookbackPeriods) {
                         const startDate = new Date(proposedStart);
                         startDate.setDate(startDate.getDate() - period.days);
-                        
-                        const totalPastHours = pilotHistory
-                            .filter(entry => {
-                                const entryDate = new Date(entry.departureTime);
-                                return entryDate >= startDate && entryDate < proposedStart;
-                            })
-                            .reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
-                        
+                        const totalPastHours = pilotHistory.filter(entry => { const entryDate = new Date(entry.departureTime); return entryDate >= startDate && entryDate < proposedStart; }).reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
                         const futureTotal = totalPastHours + proposedFT;
-
-                        if (futureTotal > period.limit) {
-                            results.push({ check: `${period.days}-Day Flight Time`, status: "VIOLATION", details: `Projected: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
-                        } else {
-                            results.push({ check: `${period.days}-Day Flight Time`, status: "OK", details: `Projected: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
-                        }
+                        if (futureTotal > period.limit) results.push({ check: `${period.days}-Day Flight Time`, status: "VIOLATION", details: `Projected: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
+                        else results.push({ check: `${period.days}-Day Flight Time`, status: "OK", details: `Projected: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
                     }
-                    
                     setLegalityResult(results);
-                } catch(err) { 
-                    console.error("Legality Check Error:", err);
-                    setError("Failed to check legality. An unexpected error occurred.");
-                } finally { 
-                    setIsCheckingLegality(false); 
-                }
+                } catch(err) { console.error("Legality Check Error:", err); setError("Failed to check legality."); } finally { setIsCheckingLegality(false); }
             };
-            
+
             const handleGenerateNote = async () => {
-                if (!legalityResult) {
-                    setError("Please run a legality check first.");
-                    return;
-                }
+                if (!legalityResult) { setError("Please run a legality check first."); return; }
                 setIsGeneratingNote(true);
                 setGeminiNote('');
                 setError('');
-
                 const selectedPilot = pilots.find(p => p.id === selectedPilotId);
                 const summary = legalityResult.map(r => `- ${r.check}: ${r.status} (${r.details})`).join('\n');
                 const prompt = `Act as a flight dispatcher. Write a concise briefing note for a proposed duty for pilot ${selectedPilot?.name || 'N/A'}.
@@ -338,307 +325,73 @@ Proposed Duty Details:
 Legality Check Summary:
 ${summary}
 Based on the summary, provide a clear, one-paragraph recommendation or a note of caution for the scheduler. Be professional and direct.`;
-
-                // This section now calls the Gemini API directly.
-                const apiKey = ""; // The environment will provide the key
+                const apiKey = ""; 
                 const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-                
-                const payload = {
-                    contents: [{
-                        role: "user",
-                        parts: [{ text: prompt }]
-                    }]
-                };
-
+                const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
                 try {
-                    const response = await fetch(apiUrl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
-
-                    if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(errorData.error?.message || `API Error: ${response.status}`);
-                    }
-                    
+                    const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                    if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error?.message || `API Error: ${response.status}`); }
                     const result = await response.json();
-                    
-                    if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
-                        setGeminiNote(result.candidates[0].content.parts[0].text);
-                    } else {
-                        throw new Error("Invalid response structure from the AI service.");
-                    }
-                } catch (err) {
-                    console.error("Error calling Gemini API:", err);
-                    setError(`Failed to generate note: ${err.message}`);
-                } finally {
-                    setIsGeneratingNote(false);
-                }
+                    if (result.candidates?.[0]?.content?.parts?.[0]?.text) setGeminiNote(result.candidates[0].content.parts[0].text);
+                    else throw new Error("Invalid response structure from the AI service.");
+                } catch (err) { console.error("Error calling Gemini API:", err); setError(`Failed to generate note: ${err.message}`); } finally { setIsGeneratingNote(false); }
             };
-
-            const handleTrackLive = async (flight) => {
-                if (!flight || !flight.callSign) {
-                    setError("No callsign available for this flight to track.");
-                    return;
-                }
-                setIsTracking(true);
-                setLiveTrackingData(null);
-                setShowTrackingModal(true);
-                setError('');
-
-                try {
-                    const endpoint = `${API_BASE_URL}/api/track/${flight.callSign}`;
-                    const response = await fetch(endpoint);
-                    const data = await response.json();
-
-                    if (!response.ok) {
-                        throw new Error(data.details || data.message || "Failed to fetch tracking data.");
-                    }
-
-                    if (data.states && data.states.length > 0) {
-                        const flightState = data.states[0];
-                        setLiveTrackingData({
-                            callsign: flightState[1].trim(),
-                            origin: flightState[2],
-                            longitude: flightState[5],
-                            latitude: flightState[6],
-                            altitude: flightState[7] ? Math.round(flightState[7] * 3.28084) : 'N/A',
-                            on_ground: flightState[8],
-                            velocity: flightState[9] ? `${(flightState[9] * 1.94384).toFixed(0)} kts` : 'N/A',
-                            vertical_rate: flightState[11] ? `${(flightState[11] * 196.85).toFixed(0)} fpm` : 'N/A'
-                        });
-                    } else {
-                        setLiveTrackingData({ error: "No live ADSB data found for this callsign. The flight may have already landed or is not yet transmitting." });
-                    }
-                } catch (err) {
-                    console.error("Error tracking flight:", err);
-                    setLiveTrackingData({ error: `Could not track flight: ${err.message}` });
-                } finally {
-                    setIsTracking(false);
-                }
-            };
-
 
             // --- Render Logic ---
-
-            if (!isAuthReady) {
-                return (
-                    <div className="flex items-center justify-center min-h-screen text-white text-xl">
-                        Initializing Dashboard...
-                    </div>
-                );
-            }
-
-            if (!user) {
-                return (
-                     <div className="flex items-center justify-center min-h-screen">
-                        <div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl text-center">
-                            <h2 className="text-3xl font-bold text-sky-400">Authentication Required</h2>
-                            <p className="text-slate-400">There was an issue authenticating your session. Please ensure you have access and try refreshing the page.</p>
-                            {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg">{error}</div>}
-                        </div>
-                    </div>
-                );
-            }
+            if (!isAuthReady) return <div className="flex items-center justify-center min-h-screen text-white text-xl">Initializing Dashboard...</div>;
             
-            const displayedFlights = allApiFlights
-                .filter(flight => flight.crew?.some(c => c.crewId === selectedPilotId))
-                .sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
+            if (!user) return <div className="flex items-center justify-center min-h-screen"><div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl text-center"><h2 className="text-3xl font-bold text-sky-400">Authentication Required</h2><p className="text-slate-400">There was an issue authenticating. Please try refreshing.</p>{error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg">{error}</div>}</div></div>;
+            
+            const displayedFlights = allApiFlights.filter(flight => flight.crew?.some(c => c.crewId === selectedPilotId)).sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
 
             return (
                 <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 p-4 md:p-8">
                     <header className="mb-8 text-center relative">
                         <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Flight Operations Dashboard</h1>
-                        <p className="text-slate-400 text-sm mt-1">
-                            User ID: <span className="font-mono text-xs">{user.uid}</span>
-                        </p>
-                        <div className="absolute top-0 right-0">
-                            <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors">
-                                Sign Out
-                            </button>
-                        </div>
+                        <p className="text-slate-400 text-sm mt-1">User ID: <span className="font-mono text-xs">{user.uid}</span></p>
+                        <div className="absolute top-0 right-0"><button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors">Sign Out</button></div>
                     </header>
                     {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
                     
                     <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
+                        <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Live Fleet Map</h2>
+                        <div id="fleet-map">
+                            {isMapLoading && <div className="h-full flex items-center justify-center text-slate-400">Loading Map Data...</div>}
+                        </div>
+                    </div>
+
+                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
                         <h2 className="text-xl font-semibold mb-4 text-sky-400 text-center">Sync Flight Data</h2>
                         <div className="flex flex-col sm:flex-row justify-center items-end gap-4">
-                            <div>
-                                <label htmlFor="apiFromDate" className="block text-sm font-medium text-slate-300">From</label>
-                                <input type="date" id="apiFromDate" value={apiFromDate} onChange={e => setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg p-2"/>
-                            </div>
-                            <div>
-                                <label htmlFor="apiToDate" className="block text-sm font-medium text-slate-300">To</label>
-                                <input type="date" id="apiToDate" value={apiToDate} onChange={e => setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg p-2"/>
-                            </div>
-                            <button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled={isApiLoading}>
-                                {isApiLoading ? 'Syncing...' : 'Sync Flights'}
-                            </button>
+                            <div><label htmlFor="apiFromDate" className="block text-sm font-medium text-slate-300">From</label><input type="date" id="apiFromDate" value={apiFromDate} onChange={e => setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg p-2"/></div>
+                            <div><label htmlFor="apiToDate" className="block text-sm font-medium text-slate-300">To</label><input type="date" id="apiToDate" value={apiToDate} onChange={e => setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg p-2"/></div>
+                            <button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled={isApiLoading}>{isApiLoading ? 'Syncing...' : 'Sync Flights'}</button>
                         </div>
-                         {apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}
+                        {apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}
                     </div>
                     
                     <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
-                      <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status Dashboard</h2>
-                      <div className="overflow-x-auto">
-                          <table className="min-w-full divide-y divide-slate-700">
-                              <thead className="bg-slate-700/50">
-                                  <tr>
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Pilot</th>
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 28 Days</th>
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 90 Days</th>
-                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 365 Days</th>
-                                  </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-700">
-                                  {dashboardData.length > 0 ? dashboardData.map(pilotStats => {
-                                      const p28 = (pilotStats.total28 / MAX_FLIGHT_TIME_28_DAYS) * 100;
-                                      const p90 = (pilotStats.total90 / MAX_FLIGHT_TIME_90_DAYS) * 100;
-                                      const p365 = (pilotStats.total365 / MAX_FLIGHT_TIME_365_DAYS) * 100;
-                                      const getColor = (percentage) => {
-                                          if (percentage > 90) return 'text-red-400';
-                                          if (percentage > 75) return 'text-yellow-400';
-                                          return 'text-green-400';
-                                      };
-                                      return (
-                                          <tr key={pilotStats.pilotId} className="hover:bg-slate-800">
-                                              <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-slate-200">{pilotStats.name}</td>
-                                              <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p28)}`}>{pilotStats.total28.toFixed(1)} / {MAX_FLIGHT_TIME_28_DAYS}h</td>
-                                              <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p90)}`}>{pilotStats.total90.toFixed(1)} / {MAX_FLIGHT_TIME_90_DAYS}h</td>
-                                              <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p365)}`}>{pilotStats.total365.toFixed(1)} / {MAX_FLIGHT_TIME_365_DAYS}h</td>
-                                          </tr>
-                                      )
-                                  }) : (
-                                      <tr><td colSpan="4" className="px-4 py-5 text-center text-slate-400 italic">No pilot data to display. Sync from API to populate.</td></tr>
-                                  )}
-                              </tbody>
-                          </table>
-                      </div>
+                        <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status Dashboard</h2>
+                        <div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50"><tr><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Pilot</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 28 Days</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 90 Days</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 365 Days</th></tr></thead><tbody className="divide-y divide-slate-700">{dashboardData.length > 0 ? dashboardData.map(pilotStats => { const p28 = (pilotStats.total28 / MAX_FLIGHT_TIME_28_DAYS) * 100; const p90 = (pilotStats.total90 / MAX_FLIGHT_TIME_90_DAYS) * 100; const p365 = (pilotStats.total365 / MAX_FLIGHT_TIME_365_DAYS) * 100; const getColor = (p) => p > 90 ? 'text-red-400' : p > 75 ? 'text-yellow-400' : 'text-green-400'; return (<tr key={pilotStats.pilotId} className="hover:bg-slate-800"><td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-slate-200">{pilotStats.name}</td><td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p28)}`}>{pilotStats.total28.toFixed(1)}/{MAX_FLIGHT_TIME_28_DAYS}h</td><td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p90)}`}>{pilotStats.total90.toFixed(1)}/{MAX_FLIGHT_TIME_90_DAYS}h</td><td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p365)}`}>{pilotStats.total365.toFixed(1)}/{MAX_FLIGHT_TIME_365_DAYS}h</td></tr>)}) : (<tr><td colSpan="4" className="px-4 py-5 text-center text-slate-400 italic">No pilot data. Sync from API.</td></tr>)}</tbody></table></div>
                     </div>
                     
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div className="lg:col-span-1 space-y-6">
-                            {/* Legality Checker */}
-                            <div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4">
+                             <div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4">
                                 <h2 className="text-xl font-semibold text-sky-400">Legality & Briefing Tool</h2>
-                                <div>
-                                    <label className="block text-sm font-medium text-slate-300">Select Pilot</label>
-                                    <select value={selectedPilotId} onChange={(e) => { setSelectedPilotId(e.target.value); setLegalityResult(null); setGeminiNote('') }} className="mt-1 bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>
-                                        {pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync flights to populate pilots</option>}
-                                    </select>
-                                </div>
-                                <div className="pt-4 border-t border-slate-700">
-                                  <h3 className="text-lg font-semibold text-slate-300 mb-2">Propose Future Duty</h3>
-                                  <div>
-                                      <label className="block text-sm font-medium text-slate-300">Date</label>
-                                      <input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                                  </div>
-                                  <div className="flex gap-4 mt-2">
-                                      <div className="flex-1">
-                                          <label className="block text-sm font-medium text-slate-300">Start (UTC)</label>
-                                          <input type="time" value={proposedStartTime} onChange={e => setProposedStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                                      </div>
-                                       <div className="flex-1">
-                                          <label className="block text-sm font-medium text-slate-300">End (UTC)</label>
-                                          <input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                                      </div>
-                                  </div>
-                                  <div className="mt-2">
-                                      <label className="block text-sm font-medium text-slate-300">Flight Time (Hours)</label>
-                                      <input type="number" step="0.1" value={proposedFlightTime} onChange={e => setProposedFlightTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
-                                  </div>
-                                </div>
-                                 <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg transition-colors disabled:opacity-50" disabled={isCheckingLegality || !selectedPilotId}>
-                                    {isCheckingLegality ? 'Checking...' : 'Check Legality'}
-                                </button>
-                                {legalityResult && (
-                                    <div className="mt-4 pt-4 border-t border-slate-700/50">
-                                        <h3 className="font-bold text-lg mb-2">Legality Results:</h3>
-                                        <ul className="space-y-1">
-                                            {legalityResult.map((res, index) => (
-                                                <li key={index} className={`flex justify-between p-2 rounded-md text-sm ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
-                                                    <span className="font-semibold">{res.check}:</span>
-                                                    <span>{res.details}</span>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                        <button onClick={handleGenerateNote} disabled={isGeneratingNote} className="w-full mt-4 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2.5 px-6 rounded-lg shadow-lg disabled:opacity-50 transition-colors">
-                                            {isGeneratingNote ? 'Generating...' : '✨ Generate Briefing Note'}
-                                        </button>
-                                    </div>
-                                )}
-                                {geminiNote && (
-                                     <div className="mt-4 p-4 bg-slate-900/70 rounded-lg">
-                                        <h3 className="font-bold text-lg mb-2 text-amber-400">AI Briefing Note:</h3>
-                                        <p className="text-slate-300 whitespace-pre-wrap text-sm">{geminiNote}</p>
-                                    </div>
-                                )}
+                                <div><label className="block text-sm font-medium text-slate-300">Select Pilot</label><select value={selectedPilotId} onChange={(e) => { setSelectedPilotId(e.target.value); setLegalityResult(null); setGeminiNote('') }} className="mt-1 bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>{pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync flights to populate pilots</option>}</select></div>
+                                <div className="pt-4 border-t border-slate-700"><h3 className="text-lg font-semibold text-slate-300 mb-2">Propose Future Duty</h3><div><label className="block text-sm font-medium text-slate-300">Date</label><input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/></div><div className="flex gap-4 mt-2"><div className="flex-1"><label className="block text-sm font-medium text-slate-300">Start (UTC)</label><input type="time" value={proposedStartTime} onChange={e => setProposedStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/></div><div className="flex-1"><label className="block text-sm font-medium text-slate-300">End (UTC)</label><input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/></div></div><div className="mt-2"><label className="block text-sm font-medium text-slate-300">Flight Time (Hours)</label><input type="number" step="0.1" value={proposedFlightTime} onChange={e => setProposedFlightTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/></div></div>
+                                <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg transition-colors disabled:opacity-50" disabled={isCheckingLegality || !selectedPilotId}>{isCheckingLegality ? 'Checking...' : 'Check Legality'}</button>
+                                {legalityResult && (<div className="mt-4 pt-4 border-t border-slate-700/50"><h3 className="font-bold text-lg mb-2">Legality Results:</h3><ul className="space-y-1">{legalityResult.map((res, index) => (<li key={index} className={`flex justify-between p-2 rounded-md text-sm ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/20 text-red-300'}`}><span className="font-semibold">{res.check}:</span><span>{res.details}</span></li>))}</ul><button onClick={handleGenerateNote} disabled={isGeneratingNote} className="w-full mt-4 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2.5 px-6 rounded-lg shadow-lg disabled:opacity-50 transition-colors">{isGeneratingNote ? 'Generating...' : '✨ Generate Briefing Note'}</button></div>)}
+                                {geminiNote && (<div className="mt-4 p-4 bg-slate-900/70 rounded-lg"><h3 className="font-bold text-lg mb-2 text-amber-400">AI Briefing Note:</h3><p className="text-slate-300 whitespace-pre-wrap text-sm">{geminiNote}</p></div>)}
                             </div>
                         </div>
 
-                        {/* Flight Log Table */}
                         <div className="lg:col-span-2 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
                             <h2 className="text-xl font-semibold mb-4 text-sky-400">Flight Log for: <span className="font-bold">{pilots.find(p=>p.id === selectedPilotId)?.name || '...'}</span></h2>
-                             <div className="overflow-auto max-h-[75vh] custom-scrollbar">
-                                <table className="min-w-full divide-y divide-slate-700">
-                                    <thead className="bg-slate-700/50 sticky top-0 backdrop-blur-sm">
-                                    <tr>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Date & Time (UTC)</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Call Sign</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Route</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Aircraft</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Actions</th>
-                                    </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-700">
-                                    {displayedFlights.length > 0 ? displayedFlights.map(flight => (
-                                        <tr key={flight.flightId} className="hover:bg-slate-800">
-                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{formatDateTime(flight.departureTime)}</td>
-                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300 font-mono">{flight.callSign || 'N/A'}</td>
-                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{flight.departure} {'->'} {flight.destination}</td>
-                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.aircraftRegistration}</td>
-                                        <td className="px-4 py-4 whitespace-nowrap text-sm">
-                                            <button onClick={() => handleTrackLive(flight)} className="text-sky-400 hover:text-sky-300 font-semibold disabled:text-slate-500 disabled:cursor-not-allowed" disabled={!flight.callSign || flight.callSign.trim() === ''}>Track Live</button>
-                                        </td>
-                                        </tr>
-                                    )) : (
-                                        <tr><td colSpan="5" className="px-4 py-5 text-center text-slate-400 italic">No flights to display for selected pilot.</td></tr>
-                                    )}
-                                    </tbody>
-                                </table>
-                            </div>
+                            <div className="overflow-auto max-h-[75vh] custom-scrollbar"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50 sticky top-0 backdrop-blur-sm"><tr><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Date (UTC)</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Call Sign</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Route</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Aircraft</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Actions</th></tr></thead><tbody className="divide-y divide-slate-700">{displayedFlights.length > 0 ? displayedFlights.map(flight => (<tr key={flight.flightId} className="hover:bg-slate-800"><td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{formatDateTime(flight.departureTime)}</td><td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300 font-mono">{flight.callSign || 'N/A'}</td><td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{flight.departure} {'->'} {flight.destination}</td><td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.aircraftRegistration}</td><td className="px-4 py-4 whitespace-nowrap text-sm"><button onClick={() => handleCenterOnAircraft(flight.icao24)} className="text-sky-400 hover:text-sky-300 font-semibold disabled:text-slate-500 disabled:cursor-not-allowed" disabled={!flight.icao24}>Find on Map</button></td></tr>)) : (<tr><td colSpan="5" className="px-4 py-5 text-center text-slate-400 italic">No flights to display.</td></tr>)}</tbody></table></div>
                         </div>
                     </div>
-
-                      {showTrackingModal && (
-                        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                            <div className="bg-slate-800 p-6 rounded-xl shadow-2xl w-full max-w-lg border border-slate-700">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h3 className="text-2xl font-semibold text-sky-400">Live Flight Tracking</h3>
-                                    <button onClick={() => setShowTrackingModal(false)} className="text-slate-400 hover:text-slate-200 text-2xl font-bold">&times;</button>
-                                </div>
-                                {isTracking && <div className="text-center p-8 text-slate-300">Searching for live ADSB data...</div>}
-                                {!isTracking && liveTrackingData && (
-                                    <div className="space-y-2">
-                                        {liveTrackingData.error ? (
-                                            <p className="text-yellow-400">{liveTrackingData.error}</p>
-                                        ) : (
-                                            <div className="text-lg grid grid-cols-2 gap-x-4 gap-y-2">
-                                                <strong className="font-semibold text-slate-400">Callsign:</strong> <span className="font-mono">{liveTrackingData.callsign}</span>
-                                                <strong className="font-semibold text-slate-400">Status:</strong> <span className={liveTrackingData.on_ground ? 'text-yellow-400' : 'text-green-400'}>{liveTrackingData.on_ground ? "On Ground" : "In Air"}</span>
-                                                <strong className="font-semibold text-slate-400">Latitude:</strong> <span>{liveTrackingData.latitude}</span>
-                                                <strong className="font-semibold text-slate-400">Longitude:</strong> <span>{liveTrackingData.longitude}</span>
-                                                <strong className="font-semibold text-slate-400">Altitude:</strong> <span>{liveTrackingData.altitude} ft</span>
-                                                <strong className="font-semibold text-slate-400">Ground Speed:</strong> <span>{liveTrackingData.velocity}</span>
-                                                <strong className="font-semibold text-slate-400">Vertical Rate:</strong> <span>{liveTrackingData.vertical_rate}</span>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                      )}
                 </div>
             );
         }
