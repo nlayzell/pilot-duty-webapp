@@ -21,12 +21,11 @@
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #64748b; }
         
-        /* Style for the permanent fleet map container */
         #fleet-map {
-            height: 450px; /* Or any desired height */
-            border-radius: 0.75rem; /* rounded-xl */
-            border: 1px solid #334155; /* slate-700 */
-            background-color: #1e293b; /* slate-800 */
+            height: 450px;
+            border-radius: 0.75rem;
+            border: 1px solid #334155;
+            background-color: #1e293b;
         }
     </style>
 </head>
@@ -34,11 +33,26 @@
     <div id="root"></div>
 
     <script type="module">
-        const firebaseConfig = typeof __firebase_config !== 'undefined' 
-            ? JSON.parse(__firebase_config) : null;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' 
-            ? __initial_auth_token : null;
-        window.appConfig = { firebaseConfig, initialAuthToken };
+        // This is a critical step for debugging the Vercel environment.
+        // It captures the raw environment variables before React loads.
+        console.log("Raw __firebase_config from environment:", typeof __firebase_config, __firebase_config);
+        console.log("Raw __initial_auth_token from environment:", typeof __initial_auth_token, __initial_auth_token);
+
+        let parsedConfig = null;
+        try {
+            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                parsedConfig = JSON.parse(__firebase_config);
+            }
+        } catch (e) {
+            console.error("Failed to parse __firebase_config:", e);
+        }
+
+        window.appConfig = {
+            firebaseConfig: parsedConfig,
+            initialAuthToken: typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null
+        };
+        
+        console.log("Processed window.appConfig:", window.appConfig);
     </script>
 
     <script type="text/babel" data-type="module">
@@ -47,7 +61,6 @@
 
         const { useState, useEffect, useMemo, useRef } = React;
 
-        // --- Constants and Utility Functions ---
         const API_BASE_URL = "https://flight-duty-proxy.onrender.com";
         const MAX_FLIGHT_TIME_28_DAYS = 112;
         const MAX_FLIGHT_TIME_90_DAYS = 300;
@@ -63,20 +76,14 @@
             return date.toISOString().split('T')[0];
         };
         
-        // --- Main Application Component ---
         function App() {
-            // --- State Management ---
             const [user, setUser] = useState(null);
             const [isAuthReady, setIsAuthReady] = useState(false);
             const [authInstance, setAuthInstance] = useState(null);
             const [allApiFlights, setAllApiFlights] = useState([]);
             const [pilots, setPilots] = useState([]);
             const [selectedPilotId, setSelectedPilotId] = useState('');
-            const [apiFromDate, setApiFromDate] = useState(() => {
-                const date = new Date();
-                date.setDate(date.getDate() - 30);
-                return formatDate(date);
-            });
+            const [apiFromDate, setApiFromDate] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return formatDate(d); });
             const [apiToDate, setApiToDate] = useState(formatDate(new Date()));
             const [isApiLoading, setIsApiLoading] = useState(false);
             const [apiMessage, setApiMessage] = useState('Sync from the API to get started.');
@@ -89,35 +96,37 @@
             const [proposedFlightTime, setProposedFlightTime] = useState('6');
             const [geminiNote, setGeminiNote] = useState('');
             const [isGeneratingNote, setIsGeneratingNote] = useState(false);
-
-            // State for fleet map
             const [fleetStates, setFleetStates] = useState([]);
             const [isMapLoading, setIsMapLoading] = useState(true);
-            
-            // Refs for map instance and markers
             const fleetMapRef = useRef(null);
             const markerRef = useRef({});
             const planeIcon = L.divIcon({
                 html: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-sky-400"><path d="M2 21h20L12 2 2 21z" transform="rotate(-45 12 12)"></path></svg>`,
-                className: '',
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
+                className: '', iconSize: [24, 24], iconAnchor: [12, 12]
             });
-
-
-            // --- Effects ---
 
             useEffect(() => {
                 const { firebaseConfig, initialAuthToken } = window.appConfig;
-                if (!firebaseConfig) { setError("Firebase configuration is missing."); setIsAuthReady(true); return; }
+                
+                // The most important debugging step: check if the config is valid.
+                if (!firebaseConfig || typeof firebaseConfig !== 'object' || !firebaseConfig.apiKey) {
+                    setError("Firebase configuration is missing or invalid.");
+                    setIsAuthReady(true);
+                    return; 
+                }
+
                 try {
                     const app = initializeApp(firebaseConfig);
                     const auth = getAuth(app);
                     setAuthInstance(auth);
                     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-                        if (currentUser) setUser(currentUser);
-                        else if (initialAuthToken) await signInWithCustomToken(auth, initialAuthToken);
-                        else await signInAnonymously(auth);
+                        if (currentUser) {
+                            setUser(currentUser);
+                        } else if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
                         setIsAuthReady(true);
                     });
                     return () => unsubscribe();
@@ -125,224 +134,97 @@
             }, []);
             
             const dashboardData = useMemo(() => {
-                if (allApiFlights.length === 0 || pilots.length === 0) return [];
+                if (!allApiFlights.length || !pilots.length) return [];
                 const now = new Date();
                 return pilots.map(pilot => {
-                    const pilotHistory = allApiFlights.filter(flight => flight.crew?.some(c => c.crewId === pilot.id));
+                    const pilotHistory = allApiFlights.filter(f => f.crew?.some(c => c.crewId === pilot.id));
                     const stats = { pilotId: pilot.id, name: pilot.name };
-                    const lookbackPeriods = [{ days: 28, limit: MAX_FLIGHT_TIME_28_DAYS }, { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS }, { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }];
-                    lookbackPeriods.forEach(period => {
-                        const startDate = new Date(now);
-                        startDate.setDate(now.getDate() - period.days);
-                        const totalHours = pilotHistory.filter(entry => new Date(entry.departureTime) >= startDate).reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
-                        stats[`total${period.days}`] = totalHours;
+                    [{d:28,l:112},{d:90,l:300},{d:365,l:1000}].forEach(p => {
+                        const start = new Date(now); start.setDate(now.getDate() - p.d);
+                        stats[`total${p.d}`] = pilotHistory.filter(e => new Date(e.departureTime) >= start).reduce((s, e) => s + (e.flightLogTime?.flight || 0), 0);
                     });
                     return stats;
                 });
             }, [allApiFlights, pilots]);
 
             const fetchFleetStates = async () => {
+                if (!allApiFlights.length) { setFleetStates([]); return; }
+                const uniqueFlights = []; const seenIcaos = new Set();
+                const sortedFlights = [...allApiFlights].sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
+                for (const f of sortedFlights) { if (f.icao24 && f.callSign && !seenIcaos.has(f.icao24)) { uniqueFlights.push(f); seenIcaos.add(f.icao24); } }
+                if (!uniqueFlights.length) return;
                 setIsMapLoading(true);
                 try {
-                    // This assumes the proxy has an endpoint to get all states from OpenSky
-                    const response = await fetch(`${API_BASE_URL}/api/track/all`);
-                    const data = await response.json();
-                    if (!response.ok) throw new Error(data.message || "Failed to fetch fleet states");
-                    setFleetStates(data.states || []);
-                } catch (err) {
-                    console.error("Failed to fetch fleet data:", err);
-                    // Don't show a blocking error for a background refresh failure
-                } finally {
-                    setIsMapLoading(false);
-                }
+                    const promises = uniqueFlights.map(f => fetch(`${API_BASE_URL}/api/track/${f.callSign.trim()}`));
+                    const responses = await Promise.allSettled(promises);
+                    const states = [];
+                    for (const res of responses) {
+                        if (res.status === 'fulfilled' && res.value.ok && res.value.headers.get("content-type")?.includes("application/json")) {
+                            const data = await res.value.json();
+                            if (data.states?.length) states.push(...data.states);
+                        } else { console.warn(`Failed to fetch state:`, res.reason || res.value.statusText); }
+                    }
+                    setFleetStates(states);
+                } catch (err) { console.error("Error fetching fleet data:", err); } finally { setIsMapLoading(false); }
             };
 
-            // Effect to initialize the fleet map and set up periodic refresh
             useEffect(() => {
-                // This effect runs when auth state is ready.
-                // It ensures the #fleet-map div exists before L.map is called.
-                if (isAuthReady && user && !fleetMapRef.current) {
-                    const mapContainer = document.getElementById('fleet-map');
-                    if (mapContainer) {
-                        fleetMapRef.current = L.map('fleet-map').setView([30, 0], 2);
-                        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-                            subdomains: 'abcd', maxZoom: 20
-                        }).addTo(fleetMapRef.current);
-                        
-                        fetchFleetStates(); 
-                        const intervalId = setInterval(fetchFleetStates, 60000); 
-                        
-                        return () => clearInterval(intervalId);
-                    }
+                if (isAuthReady && user && !fleetMapRef.current && document.getElementById('fleet-map')) {
+                    fleetMapRef.current = L.map('fleet-map').setView([30, 0], 2);
+                    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20 }).addTo(fleetMapRef.current);
+                    fetchFleetStates(); 
+                    const id = setInterval(fetchFleetStates, 60000); 
+                    return () => clearInterval(id);
                 }
             }, [isAuthReady, user]);
+            
+            useEffect(() => { if (isAuthReady && user) fetchFleetStates(); }, [allApiFlights, isAuthReady, user]);
 
-            // Effect to update aircraft markers on the map
             useEffect(() => {
-                const map = fleetMapRef.current;
-                if (!map) return;
-
-                // Clear existing markers
-                Object.values(markerRef.current).forEach(marker => map.removeLayer(marker));
-                markerRef.current = {};
-
-                const knownIcaos = new Set(allApiFlights.map(f => f.icao24).filter(Boolean));
-                
+                const map = fleetMapRef.current; if (!map) return;
+                Object.values(markerRef.current).forEach(m => map.removeLayer(m)); markerRef.current = {};
                 if (fleetStates.length > 0) {
-                    fleetStates.forEach(state => {
-                        const icao24 = state[0];
-                        // Only display aircraft that are part of our synced fleet
-                        if (knownIcaos.has(icao24)) {
-                            const callsign = state[1]?.trim() || 'N/A';
-                            const longitude = state[5];
-                            const latitude = state[6];
-                            const altitude = state[7] ? `${Math.round(state[7] * 3.28084)} ft` : 'N/A';
-                            const velocity = state[9] ? `${(state[9] * 1.94384).toFixed(0)} kts` : 'N/A';
-
-                            if (latitude && longitude) {
-                                const marker = L.marker([latitude, longitude], { icon: planeIcon })
-                                    .addTo(map)
-                                    .bindPopup(`<b>${callsign}</b><br>ICAO: ${icao24}<br>Alt: ${altitude}<br>GS: ${velocity}`);
-                                markerRef.current[icao24] = marker;
-                            }
+                    fleetStates.forEach(s => {
+                        const [icao, callsign, , , , lon, lat, alt, , vel] = s;
+                        if (lat && lon) {
+                            const marker = L.marker([lat, lon], { icon: planeIcon }).addTo(map)
+                                .bindPopup(`<b>${callsign?.trim()||'N/A'}</b><br>ICAO: ${icao}<br>Alt: ${alt?Math.round(alt*3.28084):'N/A'} ft<br>GS: ${vel?(vel*1.94384).toFixed(0):'N/A'} kts`);
+                            markerRef.current[icao] = marker;
                         }
                     });
                 }
-            }, [fleetStates, allApiFlights]); // Rerun when fleet or synced flights change
+            }, [fleetStates]);
 
-
-            // --- Handlers ---
-            const handleSignOut = async () => {
-                if (authInstance) {
-                    try { await signOut(authInstance); setUser(null); } 
-                    catch (e) { setError("Failed to sign out."); console.error("Sign out error:", e); }
-                }
-            };
+            const handleSignOut = async () => { if(authInstance) try { await signOut(authInstance); setUser(null); } catch (e) { setError("Failed to sign out."); }};
             
             const fetchAndProcessFlightsFromAPI = async () => {
-                setIsApiLoading(true);
-                setApiMessage("Fetching flights...");
-                setError('');
-                setAllApiFlights([]);
-                setPilots([]);
-                setSelectedPilotId('');
-                setLegalityResult(null);
-                setGeminiNote('');
-
+                setIsApiLoading(true); setApiMessage("Fetching flights..."); setError(''); setAllApiFlights([]); setPilots([]);
                 const endpoint = `${API_BASE_URL}/api/flights`;
-                const fromDateUTC = new Date(apiFromDate).toISOString();
-                const toDateUTC = new Date(new Date(apiToDate).setUTCHours(23, 59, 59, 999)).toISOString();
-
+                const body = JSON.stringify({ fromDate: new Date(apiFromDate).toISOString(), toDate: new Date(new Date(apiToDate).setUTCHours(23,59,59,999)).toISOString() });
                 try {
-                    const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fromDate: fromDateUTC, toDate: toDateUTC }) });
-                    const responseData = await response.json();
-                    if (!response.ok) throw new Error(responseData.details || responseData.message || 'Unknown proxy error');
-                    
-                    const flightsToProcess = responseData.flights || [];
-                    setAllApiFlights(flightsToProcess); // This will trigger the map update effect
-
-                    if (flightsToProcess.length > 0) {
-                        const pilotMap = new Map();
-                        flightsToProcess.forEach(flight => {
-                            if (flight.crew) flight.crew.forEach(member => { if (member.crewId && !pilotMap.has(member.crewId)) pilotMap.set(member.crewId, { id: member.crewId, name: member.name || member.crewId }); });
-                        });
-                        const uniquePilots = Array.from(pilotMap.values()).sort((a,b) => a.name.localeCompare(b.name));
-                        setPilots(uniquePilots);
-                        if(uniquePilots.length > 0) setSelectedPilotId(uniquePilots[0].id);
-                        setApiMessage(`Successfully fetched ${flightsToProcess.length} flights.`);
-                    } else {
-                        setApiMessage("No flights found in the date range.");
-                    }
-                } catch (err) {
-                    setApiMessage(`Error: ${err.message}`);
-                    setError(`API Error: ${err.message}`);
-                } finally {
-                    setIsApiLoading(false);
-                }
+                    const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+                    const data = await res.json(); if (!res.ok) throw new Error(data.details || 'Proxy error');
+                    const flights = data.flights || []; setAllApiFlights(flights);
+                    if (flights.length) {
+                        const pMap = new Map();
+                        flights.forEach(f => { if (f.crew) f.crew.forEach(m => { if (m.crewId && !pMap.has(m.crewId)) pMap.set(m.crewId, { id: m.crewId, name: m.name||m.crewId }); }); });
+                        const uniquePilots = Array.from(pMap.values()).sort((a,b) => a.name.localeCompare(b.name));
+                        setPilots(uniquePilots); if (uniquePilots.length) setSelectedPilotId(uniquePilots[0].id);
+                        setApiMessage(`Fetched ${flights.length} flights.`);
+                    } else { setApiMessage("No flights found."); }
+                } catch (err) { setApiMessage(`Error: ${err.message}`); setError(`API Error: ${err.message}`); } finally { setIsApiLoading(false); }
             };
             
-            const handleCenterOnAircraft = (icao24) => {
-                const map = fleetMapRef.current;
-                const marker = markerRef.current[icao24];
-                
-                if (map && marker) {
-                    map.setView(marker.getLatLng(), 8); // Zoom in
-                    marker.openPopup();
-                } else {
-                    setError(`Aircraft ${icao24} not found in current live data.`);
-                    setTimeout(() => setError(''), 5000); // Clear error after 5s
-                }
+            const handleCenterOnAircraft = (icao) => {
+                const map = fleetMapRef.current; const marker = markerRef.current[icao];
+                if (map && marker) { map.setView(marker.getLatLng(), 8); marker.openPopup(); } 
+                else { setError(`Aircraft ${icao} not live.`); setTimeout(() => setError(''), 5000); }
             };
 
-            const handleLegalityCheck = async () => {
-                if(!selectedPilotId) return;
-                setIsCheckingLegality(true);
-                setLegalityResult(null);
-                setGeminiNote(''); 
-                setError('');
-                try {
-                    const pilotHistory = allApiFlights.filter(flight => flight.crew?.some(c => c.crewId === selectedPilotId));
-                    const proposedStart = new Date(`${proposedDutyDate}T${proposedStartTime}:00Z`);
-                    let proposedEnd = new Date(`${proposedDutyDate}T${proposedEndTime}:00Z`);
-                    if(proposedEnd <= proposedStart) proposedEnd.setDate(proposedEnd.getDate() + 1);
-                    const proposedFT = parseFloat(proposedFlightTime);
-                    let results = [];
-                    const lastFlight = pilotHistory.map(f => new Date(f.flightLogTime?.timeIn || f.arrivalTime)).filter(d => !isNaN(d.getTime())).sort((a,b) => b - a)[0];
-                    if (lastFlight) {
-                        const restInHours = (proposedStart.getTime() - lastFlight.getTime()) / (1000 * 60 * 60);
-                        if(restInHours < MIN_REST_AWAY_FROM_BASE) results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
-                        else results.push({ check: "Minimum Rest", status: "OK", details: `${restInHours.toFixed(1)}h rest is sufficient.`});
-                    } else {
-                        results.push({ check: "Minimum Rest", status: "OK", details: "No recent flights found."});
-                    }
-                    const lookbackPeriods = [{ days: 28, limit: MAX_FLIGHT_TIME_28_DAYS }, { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS }, { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }];
-                    for (const period of lookbackPeriods) {
-                        const startDate = new Date(proposedStart);
-                        startDate.setDate(startDate.getDate() - period.days);
-                        const totalPastHours = pilotHistory.filter(entry => { const entryDate = new Date(entry.departureTime); return entryDate >= startDate && entryDate < proposedStart; }).reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
-                        const futureTotal = totalPastHours + proposedFT;
-                        if (futureTotal > period.limit) results.push({ check: `${period.days}-Day Flight Time`, status: "VIOLATION", details: `Projected: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
-                        else results.push({ check: `${period.days}-Day Flight Time`, status: "OK", details: `Projected: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
-                    }
-                    setLegalityResult(results);
-                } catch(err) { console.error("Legality Check Error:", err); setError("Failed to check legality."); } finally { setIsCheckingLegality(false); }
-            };
-
-            const handleGenerateNote = async () => {
-                if (!legalityResult) { setError("Please run a legality check first."); return; }
-                setIsGeneratingNote(true);
-                setGeminiNote('');
-                setError('');
-                const selectedPilot = pilots.find(p => p.id === selectedPilotId);
-                const summary = legalityResult.map(r => `- ${r.check}: ${r.status} (${r.details})`).join('\n');
-                const prompt = `Act as a flight dispatcher. Write a concise briefing note for a proposed duty for pilot ${selectedPilot?.name || 'N/A'}.
-Proposed Duty Details:
-- Date: ${proposedDutyDate}
-- Start Time (UTC): ${proposedStartTime}
-- End Time (UTC): ${proposedEndTime}
-- Proposed Flight Hours: ${proposedFlightTime}
-Legality Check Summary:
-${summary}
-Based on the summary, provide a clear, one-paragraph recommendation or a note of caution for the scheduler. Be professional and direct.`;
-                const apiKey = ""; 
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-                const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
-                try {
-                    const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                    if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.error?.message || `API Error: ${response.status}`); }
-                    const result = await response.json();
-                    if (result.candidates?.[0]?.content?.parts?.[0]?.text) setGeminiNote(result.candidates[0].content.parts[0].text);
-                    else throw new Error("Invalid response structure from the AI service.");
-                } catch (err) { console.error("Error calling Gemini API:", err); setError(`Failed to generate note: ${err.message}`); } finally { setIsGeneratingNote(false); }
-            };
-
-            // --- Render Logic ---
-            if (!isAuthReady) return <div className="flex items-center justify-center min-h-screen text-white text-xl">Initializing Dashboard...</div>;
+            if (!isAuthReady) return <div className="flex items-center justify-center min-h-screen text-white text-xl">Initializing...</div>;
+            if (!user) return <div className="flex items-center justify-center min-h-screen"><div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl text-center"><h2 className="text-3xl font-bold text-sky-400">Authentication Required</h2><p className="text-slate-400">There was an issue authenticating.</p>{error && <div className="bg-red-500/20 text-red-300 p-3 mt-4 rounded-lg">{error}</div>}</div></div>;
             
-            if (!user) return <div className="flex items-center justify-center min-h-screen"><div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl text-center"><h2 className="text-3xl font-bold text-sky-400">Authentication Required</h2><p className="text-slate-400">There was an issue authenticating. Please try refreshing.</p>{error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg">{error}</div>}</div></div>;
-            
-            const displayedFlights = allApiFlights.filter(flight => flight.crew?.some(c => c.crewId === selectedPilotId)).sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
+            const displayedFlights = allApiFlights.filter(f => f.crew?.some(c => c.crewId === selectedPilotId)).sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
 
             return (
                 <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 p-4 md:p-8">
@@ -353,52 +235,18 @@ Based on the summary, provide a clear, one-paragraph recommendation or a note of
                     </header>
                     {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
                     
-                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
-                        <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Live Fleet Map</h2>
-                        <div id="fleet-map">
-                            {isMapLoading && <div className="h-full flex items-center justify-center text-slate-400">Loading Map Data...</div>}
-                        </div>
-                    </div>
-
-                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
-                        <h2 className="text-xl font-semibold mb-4 text-sky-400 text-center">Sync Flight Data</h2>
-                        <div className="flex flex-col sm:flex-row justify-center items-end gap-4">
-                            <div><label htmlFor="apiFromDate" className="block text-sm font-medium text-slate-300">From</label><input type="date" id="apiFromDate" value={apiFromDate} onChange={e => setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg p-2"/></div>
-                            <div><label htmlFor="apiToDate" className="block text-sm font-medium text-slate-300">To</label><input type="date" id="apiToDate" value={apiToDate} onChange={e => setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg p-2"/></div>
-                            <button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled={isApiLoading}>{isApiLoading ? 'Syncing...' : 'Sync Flights'}</button>
-                        </div>
-                        {apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}
-                    </div>
-                    
-                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
-                        <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status Dashboard</h2>
-                        <div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50"><tr><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Pilot</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 28 Days</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 90 Days</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 365 Days</th></tr></thead><tbody className="divide-y divide-slate-700">{dashboardData.length > 0 ? dashboardData.map(pilotStats => { const p28 = (pilotStats.total28 / MAX_FLIGHT_TIME_28_DAYS) * 100; const p90 = (pilotStats.total90 / MAX_FLIGHT_TIME_90_DAYS) * 100; const p365 = (pilotStats.total365 / MAX_FLIGHT_TIME_365_DAYS) * 100; const getColor = (p) => p > 90 ? 'text-red-400' : p > 75 ? 'text-yellow-400' : 'text-green-400'; return (<tr key={pilotStats.pilotId} className="hover:bg-slate-800"><td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-slate-200">{pilotStats.name}</td><td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p28)}`}>{pilotStats.total28.toFixed(1)}/{MAX_FLIGHT_TIME_28_DAYS}h</td><td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p90)}`}>{pilotStats.total90.toFixed(1)}/{MAX_FLIGHT_TIME_90_DAYS}h</td><td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p365)}`}>{pilotStats.total365.toFixed(1)}/{MAX_FLIGHT_TIME_365_DAYS}h</td></tr>)}) : (<tr><td colSpan="4" className="px-4 py-5 text-center text-slate-400 italic">No pilot data. Sync from API.</td></tr>)}</tbody></table></div>
-                    </div>
-                    
+                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Live Fleet Map</h2><div id="fleet-map">{isMapLoading && <div className="h-full flex items-center justify-center text-slate-400">Loading Map...</div>}</div></div>
+                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold mb-4 text-sky-400 text-center">Sync Flight Data</h2><div className="flex flex-col sm:flex-row justify-center items-end gap-4"><div><label htmlFor="apiFromDate" className="block text-sm font-medium">From</label><input type="date" id="apiFromDate" value={apiFromDate} onChange={e=>setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 rounded-lg p-2"/></div><div><label htmlFor="apiToDate" className="block text-sm font-medium">To</label><input type="date" id="apiToDate" value={apiToDate} onChange={e=>setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 rounded-lg p-2"/></div><button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isApiLoading}>{isApiLoading?'Syncing...':'Sync Flights'}</button></div>{apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}</div>
+                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status</h2><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50"><tr><th className="px-4 py-3 text-left text-xs font-medium uppercase">Pilot</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 28d</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 90d</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 365d</th></tr></thead><tbody className="divide-y divide-slate-700">{dashboardData.length > 0 ? dashboardData.map(s => { const p28=(s.total28/112)*100, p90=(s.total90/300)*100, p365=(s.total365/1000)*100; const c=p=>p>90?'text-red-400':p>75?'text-yellow-400':'text-green-400'; return (<tr key={s.pilotId} className="hover:bg-slate-800"><td className="px-4 py-4">{s.name}</td><td className={`px-4 py-4 ${c(p28)}`}>{s.total28.toFixed(1)}/112h</td><td className={`px-4 py-4 ${c(p90)}`}>{s.total90.toFixed(1)}/300h</td><td className={`px-4 py-4 ${c(p365)}`}>{s.total365.toFixed(1)}/1000h</td></tr>)}) : (<tr><td colSpan="4" className="p-5 text-center italic">No data. Sync from API.</td></tr>)}</tbody></table></div></div>
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-1 space-y-6">
-                             <div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4">
-                                <h2 className="text-xl font-semibold text-sky-400">Legality & Briefing Tool</h2>
-                                <div><label className="block text-sm font-medium text-slate-300">Select Pilot</label><select value={selectedPilotId} onChange={(e) => { setSelectedPilotId(e.target.value); setLegalityResult(null); setGeminiNote('') }} className="mt-1 bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>{pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync flights to populate pilots</option>}</select></div>
-                                <div className="pt-4 border-t border-slate-700"><h3 className="text-lg font-semibold text-slate-300 mb-2">Propose Future Duty</h3><div><label className="block text-sm font-medium text-slate-300">Date</label><input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/></div><div className="flex gap-4 mt-2"><div className="flex-1"><label className="block text-sm font-medium text-slate-300">Start (UTC)</label><input type="time" value={proposedStartTime} onChange={e => setProposedStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/></div><div className="flex-1"><label className="block text-sm font-medium text-slate-300">End (UTC)</label><input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/></div></div><div className="mt-2"><label className="block text-sm font-medium text-slate-300">Flight Time (Hours)</label><input type="number" step="0.1" value={proposedFlightTime} onChange={e => setProposedFlightTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/></div></div>
-                                <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg transition-colors disabled:opacity-50" disabled={isCheckingLegality || !selectedPilotId}>{isCheckingLegality ? 'Checking...' : 'Check Legality'}</button>
-                                {legalityResult && (<div className="mt-4 pt-4 border-t border-slate-700/50"><h3 className="font-bold text-lg mb-2">Legality Results:</h3><ul className="space-y-1">{legalityResult.map((res, index) => (<li key={index} className={`flex justify-between p-2 rounded-md text-sm ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/20 text-red-300'}`}><span className="font-semibold">{res.check}:</span><span>{res.details}</span></li>))}</ul><button onClick={handleGenerateNote} disabled={isGeneratingNote} className="w-full mt-4 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2.5 px-6 rounded-lg shadow-lg disabled:opacity-50 transition-colors">{isGeneratingNote ? 'Generating...' : '✨ Generate Briefing Note'}</button></div>)}
-                                {geminiNote && (<div className="mt-4 p-4 bg-slate-900/70 rounded-lg"><h3 className="font-bold text-lg mb-2 text-amber-400">AI Briefing Note:</h3><p className="text-slate-300 whitespace-pre-wrap text-sm">{geminiNote}</p></div>)}
-                            </div>
-                        </div>
-
-                        <div className="lg:col-span-2 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
-                            <h2 className="text-xl font-semibold mb-4 text-sky-400">Flight Log for: <span className="font-bold">{pilots.find(p=>p.id === selectedPilotId)?.name || '...'}</span></h2>
-                            <div className="overflow-auto max-h-[75vh] custom-scrollbar"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50 sticky top-0 backdrop-blur-sm"><tr><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Date (UTC)</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Call Sign</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Route</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Aircraft</th><th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Actions</th></tr></thead><tbody className="divide-y divide-slate-700">{displayedFlights.length > 0 ? displayedFlights.map(flight => (<tr key={flight.flightId} className="hover:bg-slate-800"><td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{formatDateTime(flight.departureTime)}</td><td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300 font-mono">{flight.callSign || 'N/A'}</td><td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{flight.departure} {'->'} {flight.destination}</td><td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.aircraftRegistration}</td><td className="px-4 py-4 whitespace-nowrap text-sm"><button onClick={() => handleCenterOnAircraft(flight.icao24)} className="text-sky-400 hover:text-sky-300 font-semibold disabled:text-slate-500 disabled:cursor-not-allowed" disabled={!flight.icao24}>Find on Map</button></td></tr>)) : (<tr><td colSpan="5" className="px-4 py-5 text-center text-slate-400 italic">No flights to display.</td></tr>)}</tbody></table></div>
-                        </div>
+                        <div className="lg:col-span-2 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold mb-4 text-sky-400">Flight Log: <span className="font-bold">{pilots.find(p=>p.id===selectedPilotId)?.name||'...'}</span></h2><div className="overflow-auto max-h-[75vh] custom-scrollbar"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50 sticky top-0"><tr><th className="px-4 py-3 text-left text-xs font-medium uppercase">Date (UTC)</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Call Sign</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Route</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Aircraft</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Actions</th></tr></thead><tbody className="divide-y divide-slate-700">{displayedFlights.length>0?displayedFlights.map(f=>(<tr key={f.flightId} className="hover:bg-slate-800"><td className="p-4">{formatDateTime(f.departureTime)}</td><td className="p-4 font-mono">{f.callSign||'N/A'}</td><td className="p-4">{f.departure} {'->'} {f.destination}</td><td className="p-4">{f.aircraftRegistration}</td><td className="p-4"><button onClick={()=>handleCenterOnAircraft(f.icao24)} className="text-sky-400 hover:text-sky-300 font-semibold" disabled={!f.icao24}>Find on Map</button></td></tr>)):(<tr><td colSpan="5" className="p-5 text-center italic">No flights.</td></tr>)}</tbody></table></div></div>
+                        <div className="lg:col-span-1 space-y-6"><div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4"><h2 className="text-xl font-semibold text-sky-400">Legality & Briefing</h2><div><label className="block text-sm font-medium">Pilot</label><select value={selectedPilotId} onChange={e=>{setSelectedPilotId(e.target.value);setLegalityResult(null);setGeminiNote('')}} className="mt-1 bg-slate-700 border-slate-600 rounded-lg w-full p-2.5" disabled={!pilots.length}>{pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync to populate</option>}</select></div></div></div>
                     </div>
                 </div>
             );
         }
 
-        const container = document.getElementById('root');
-        const root = ReactDOM.createRoot(container);
-        root.render(<App />);
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 
     </script>
 </body>
