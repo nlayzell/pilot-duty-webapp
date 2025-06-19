@@ -8,128 +8,160 @@
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        /* Custom scrollbar for webkit browsers */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #1e293b; /* slate-800 */
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #475569; /* slate-600 */
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #64748b; /* slate-500 */
+        }
+    </style>
 </head>
 <body class="bg-slate-900 text-slate-200">
     <div id="root"></div>
 
+    <!-- 
+      Using ES6 modules to import Firebase.
+      This is a more modern approach than attaching to the window object.
+    -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-auth.js";
-        window.firebase = {
-            initializeApp, getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut
-        };
+        // These global variables are provided by the environment.
+        // __firebase_config contains your project's configuration.
+        // __initial_auth_token is used for secure, seamless authentication.
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : null;
+
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' 
+            ? __initial_auth_token 
+            : null;
+
+        // Make config and token available to the React component
+        window.appConfig = { firebaseConfig, initialAuthToken };
+
+        // We will initialize Firebase inside the React app's useEffect hook.
+        // This ensures React has rendered before we attempt to use the DOM.
     </script>
 
-    <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
-        
-        const firebaseConfig = {
-          apiKey: "AIzaSyBj6LK7FIgolevRztQ4z78YY4d9F1dlDyg",
-          authDomain: "flight-duty-tracker-fbeae.firebaseapp.com",
-          projectId: "flight-duty-tracker-fbeae",
-          storageBucket: "flight-duty-tracker-fbeae.firebasestorage.app", 
-          messagingSenderId: "430097302817",
-          appId: "1:430097302817:web:ed0594f45931dc84dc6a60",
-        };
-        const API_BASE_URL = "https://flight-duty-proxy.onrender.com"; 
-        const MAX_FLIGHT_TIME_28_DAYS = 112; 
-        const MAX_FLIGHT_TIME_90_DAYS = 300; 
-        const MAX_FLIGHT_TIME_365_DAYS = 1000; 
+    <!-- 
+      Importing Firebase SDKs. Updated to a more recent version for better
+      performance and security.
+    -->
+    <script type="text/babel" data-type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithCustomToken, signInAnonymously, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        const { useState, useEffect, useMemo } = React;
+
+        // --- Constants and Utility Functions ---
+        const API_BASE_URL = "https://flight-duty-proxy.onrender.com";
+        const MAX_FLIGHT_TIME_28_DAYS = 112;
+        const MAX_FLIGHT_TIME_90_DAYS = 300;
+        const MAX_FLIGHT_TIME_365_DAYS = 1000;
         const MIN_REST_AWAY_FROM_BASE = 10;
-
+        
         const formatDateTime = (dateString) => {
-          if (!dateString) return 'N/A';
-          return new Date(dateString).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+            if (!dateString) return 'N/A';
+            return new Date(dateString).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' });
         };
+
         const formatDate = (date) => {
-            const year = date.getFullYear();
-            const month = (date.getMonth() + 1).toString().padStart(2, '0');
-            const day = date.getDate().toString().padStart(2, '0');
-            return `${year}-${month}-${day}`;
+            return date.toISOString().split('T')[0];
         };
-
-        const LoginScreen = ({ auth, setError, error }) => {
-            const [email, setEmail] = useState('');
-            const [password, setPassword] = useState('');
-            const [isLoading, setIsLoading] = useState(false);
-            const { signInWithEmailAndPassword } = window.firebase;
-
-            const handleLogin = async () => {
-                setIsLoading(true);
-                setError('');
-                try {
-                    await signInWithEmailAndPassword(auth, email, password);
-                } catch (error) {
-                    setError("Login failed: Invalid email or password.");
-                } finally {
-                    setIsLoading(false);
-                }
-            };
-            
-            return (
-                <div className="flex items-center justify-center min-h-screen">
-                    <div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl">
-                        <div>
-                            <h2 className="text-3xl font-bold text-center text-sky-400">Pilot Operations Dashboard</h2>
-                            <p className="mt-2 text-center text-sm text-slate-400">Please sign in</p>
-                        </div>
-                        {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg text-center">{error}</div>}
-                        <div className="space-y-6">
-                            <div>
-                                <label className="block text-sm font-medium text-slate-300">Email address</label>
-                                <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500"/>
-                            </div>
-                             <div>
-                                <label className="block text-sm font-medium text-slate-300">Password</label>
-                                <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md text-white shadow-sm focus:outline-none focus:ring-sky-500 focus:border-sky-500"/>
-                            </div>
-                            <button onClick={handleLogin} disabled={isLoading} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-sky-600 hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-500 disabled:opacity-50">
-                                {isLoading ? 'Signing In...' : 'Sign In'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            );
-        };
-
+        
+        // --- Main Application Component ---
         function App() {
-          const [auth, setAuth] = useState(null);
-          const [user, setUser] = useState(null);
-          const [isAuthReady, setIsAuthReady] = useState(false);
-          const [allApiFlights, setAllApiFlights] = useState([]);
-          const [pilots, setPilots] = useState([]);
-          const [selectedPilotId, setSelectedPilotId] = useState('');
-          const [apiFromDate, setApiFromDate] = useState(() => {
-              const date = new Date();
-              date.setDate(date.getDate() - 7);
-              return formatDate(date);
-          });
-          const [apiToDate, setApiToDate] = useState(formatDate(new Date()));
-          const [isApiLoading, setIsApiLoading] = useState(false);
-          const [apiMessage, setApiMessage] = useState('Sync from the API to get started.');
-          const [error, setError] = useState('');
-          const [dashboardData, setDashboardData] = useState([]);
-          
-          const [liveTrackingData, setLiveTrackingData] = useState(null);
-          const [showTrackingModal, setShowTrackingModal] = useState(false);
-          const [isTracking, setIsTracking] = useState(false);
-
-          useEffect(() => {
-            const { initializeApp, getAuth, onAuthStateChanged } = window.firebase;
-            const app = initializeApp(firebaseConfig);
-            const firebaseAuth = getAuth(app);
-            setAuth(firebaseAuth);
-            const unsubscribe = onAuthStateChanged(firebaseAuth, (currentUser) => {
-                setUser(currentUser);
-                setIsAuthReady(true);
+            // --- State Management ---
+            const [user, setUser] = useState(null);
+            const [isAuthReady, setIsAuthReady] = useState(false);
+            const [authInstance, setAuthInstance] = useState(null);
+            
+            const [allApiFlights, setAllApiFlights] = useState([]);
+            const [pilots, setPilots] = useState([]);
+            const [selectedPilotId, setSelectedPilotId] = useState('');
+            
+            const [apiFromDate, setApiFromDate] = useState(() => {
+                const date = new Date();
+                date.setDate(date.getDate() - 30);
+                return formatDate(date);
             });
-            return () => unsubscribe();
-          }, []);
-          
-          useEffect(() => {
-              if (allApiFlights.length > 0 && pilots.length > 0) {
-                 const now = new Date();
-                 const dashboardStats = pilots.map(pilot => {
+            const [apiToDate, setApiToDate] = useState(formatDate(new Date()));
+            
+            const [isApiLoading, setIsApiLoading] = useState(false);
+            const [apiMessage, setApiMessage] = useState('Sync from the API to get started.');
+            const [error, setError] = useState('');
+            
+            const [legalityResult, setLegalityResult] = useState(null);
+            const [isCheckingLegality, setIsCheckingLegality] = useState(false);
+            
+            const [proposedDutyDate, setProposedDutyDate] = useState(formatDate(new Date()));
+            const [proposedStartTime, setProposedStartTime] = useState('09:00');
+            const [proposedEndTime, setProposedEndTime] = useState('17:00');
+            const [proposedFlightTime, setProposedFlightTime] = useState('6');
+            
+            const [geminiNote, setGeminiNote] = useState('');
+            const [isGeneratingNote, setIsGeneratingNote] = useState(false);
+
+            const [liveTrackingData, setLiveTrackingData] = useState(null);
+            const [showTrackingModal, setShowTrackingModal] = useState(false);
+            const [isTracking, setIsTracking] = useState(false);
+
+            // --- Effects ---
+
+            // Effect for Firebase Initialization and Authentication
+            useEffect(() => {
+                const { firebaseConfig, initialAuthToken } = window.appConfig;
+
+                if (!firebaseConfig) {
+                    setError("Firebase configuration is missing. The app cannot start.");
+                    setIsAuthReady(true);
+                    return;
+                }
+
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    const auth = getAuth(app);
+                    setAuthInstance(auth);
+
+                    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+                        if (currentUser) {
+                            setUser(currentUser);
+                        } else if (initialAuthToken) {
+                            // If there's a token, sign in with it.
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            // Fallback to anonymous sign-in if no token is available.
+                            await signInAnonymously(auth);
+                        }
+                        setIsAuthReady(true);
+                    });
+
+                    // Cleanup subscription on component unmount
+                    return () => unsubscribe();
+                } catch (e) {
+                    console.error("Firebase Initialization Error:", e);
+                    setError("Could not initialize Firebase. Check console for details.");
+                    setIsAuthReady(true);
+                }
+            }, []);
+            
+            // Effect for calculating dashboard summary data
+            const dashboardData = useMemo(() => {
+                if (allApiFlights.length === 0 || pilots.length === 0) {
+                    return [];
+                }
+                const now = new Date();
+                return pilots.map(pilot => {
                     const pilotHistory = allApiFlights.filter(flight => flight.crew?.some(c => c.crewId === pilot.id));
                     const stats = { pilotId: pilot.id, name: pilot.name };
                     const lookbackPeriods = [
@@ -146,237 +178,475 @@
                         stats[`total${period.days}`] = totalHours;
                     });
                     return stats;
-                 });
-                 setDashboardData(dashboardStats);
-              } else {
-                  setDashboardData([]);
-              }
-          }, [allApiFlights, pilots]);
+                });
+            }, [allApiFlights, pilots]);
+            
+            // --- Handlers ---
+            const handleSignOut = async () => {
+                if (authInstance) {
+                    try {
+                        await signOut(authInstance);
+                        setUser(null); // Explicitly clear user state
+                    } catch (e) {
+                        setError("Failed to sign out.");
+                        console.error("Sign out error:", e);
+                    }
+                }
+            };
+            
+            const fetchAndProcessFlightsFromAPI = async () => {
+                setIsApiLoading(true);
+                setApiMessage("Fetching flights...");
+                setError('');
+                setAllApiFlights([]);
+                setPilots([]);
+                setSelectedPilotId('');
+                setLegalityResult(null);
+                setGeminiNote('');
 
-          const handleSignOut = async () => {
-              const { signOut } = window.firebase;
-              try {
-                  await signOut(auth);
-              } catch (e) {
-                  setError("Failed to sign out.");
-              }
-          };
+                const endpoint = `${API_BASE_URL}/api/flights`;
+                const fromDateUTC = new Date(apiFromDate).toISOString();
+                const toDateUTC = new Date(new Date(apiToDate).setUTCHours(23, 59, 59, 999)).toISOString();
 
-          const fetchAndProcessFlightsFromAPI = async () => {
-            setIsApiLoading(true);
-            setApiMessage("Fetching flights...");
-            setError('');
-            setAllApiFlights([]); 
-            setPilots([]);
-            setSelectedPilotId('');
+                try {
+                    const response = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fromDate: fromDateUTC, toDate: toDateUTC })
+                    });
+                    const responseData = await response.json();
+                    if (!response.ok) throw new Error(responseData.details || responseData.message || 'Unknown proxy error');
+                    
+                    const flightsToProcess = responseData.flights || [];
+                    setAllApiFlights(flightsToProcess);
 
-            const endpoint = `${API_BASE_URL}/api/flights`;
-            const fromDateUTC = new Date(apiFromDate).toISOString();
-            const toDateUTC = new Date(new Date(apiToDate).setHours(23, 59, 59, 999)).toISOString();
+                    if (flightsToProcess.length > 0) {
+                        const pilotMap = new Map();
+                        flightsToProcess.forEach(flight => {
+                            if (flight.crew) {
+                                flight.crew.forEach(member => {
+                                    if (member.crewId && !pilotMap.has(member.crewId)) {
+                                        pilotMap.set(member.crewId, { id: member.crewId, name: member.name || member.crewId });
+                                    }
+                                });
+                            }
+                        });
+                        const uniquePilots = Array.from(pilotMap.values()).sort((a,b) => a.name.localeCompare(b.name));
+                        setPilots(uniquePilots);
+                        if(uniquePilots.length > 0) {
+                            setSelectedPilotId(uniquePilots[0].id);
+                        }
+                        setApiMessage(`Successfully fetched ${flightsToProcess.length} flights.`);
+                    } else {
+                        setApiMessage("Successfully fetched, but no flights found in the date range.");
+                    }
+                } catch (err) {
+                    setApiMessage(`Error: ${err.message}`);
+                    setError(`API Error: ${err.message}`);
+                } finally {
+                    setIsApiLoading(false);
+                }
+            };
 
-            try {
-              const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ fromDate: fromDateUTC, toDate: toDateUTC })
-              });
-              const responseData = await response.json();
-              if (!response.ok) throw new Error(responseData.details || responseData.message || 'Unknown proxy error');
-              
-              const flightsToProcess = responseData.flights || [];
-              setAllApiFlights(flightsToProcess);
+            const handleLegalityCheck = async () => {
+                if(!selectedPilotId) return;
+                setIsCheckingLegality(true);
+                setLegalityResult(null);
+                setGeminiNote(''); 
+                setError('');
 
-              if (flightsToProcess.length > 0) {
-                  const pilotMap = new Map();
-                  flightsToProcess.forEach(flight => {
-                      if (flight.crew) {
-                          flight.crew.forEach(member => {
-                              if (member.crewId && !pilotMap.has(member.crewId)) {
-                                  pilotMap.set(member.crewId, { id: member.crewId, name: member.name || member.crewId });
-                              }
-                          });
-                      }
-                  });
-                  const uniquePilots = Array.from(pilotMap.values()).sort((a,b) => a.name.localeCompare(b.name));
-                  setPilots(uniquePilots);
-                  if(uniquePilots.length > 0) {
-                      setSelectedPilotId(uniquePilots[0].id);
-                  }
-                  setApiMessage(`Successfully fetched ${flightsToProcess.length} flights.`);
-              } else {
-                setApiMessage("Successfully fetched, but no flights found in the date range.");
-              }
-            } catch (err) {
-              setApiMessage(`Error: ${err.message}`);
-              setError(`API Error: ${err.message}`);
-            } finally {
-              setIsApiLoading(false);
+                try {
+                    const pilotHistory = allApiFlights.filter(flight => 
+                        flight.crew?.some(c => c.crewId === selectedPilotId)
+                    );
+
+                    const proposedStart = new Date(`${proposedDutyDate}T${proposedStartTime}:00Z`); // Assume UTC input
+                    let proposedEnd = new Date(`${proposedDutyDate}T${proposedEndTime}:00Z`);
+                    if(proposedEnd <= proposedStart) proposedEnd.setDate(proposedEnd.getDate() + 1);
+                    
+                    const proposedFT = parseFloat(proposedFlightTime);
+                    let results = [];
+
+                    const lastFlight = pilotHistory
+                        .map(f => new Date(f.flightLogTime?.timeIn || f.arrivalTime))
+                        .filter(d => !isNaN(d.getTime()))
+                        .sort((a,b) => b - a)[0];
+
+                    if (lastFlight) {
+                        const restInHours = (proposedStart.getTime() - lastFlight.getTime()) / (1000 * 60 * 60);
+                        if(restInHours < MIN_REST_AWAY_FROM_BASE) {
+                            results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
+                        } else {
+                            results.push({ check: "Minimum Rest", status: "OK", details: `${restInHours.toFixed(1)}h rest is sufficient.`});
+                        }
+                    } else {
+                        results.push({ check: "Minimum Rest", status: "OK", details: "No recent flights found for pilot."});
+                    }
+                    
+                    const lookbackPeriods = [
+                        { days: 28, limit: MAX_FLIGHT_TIME_28_DAYS },
+                        { days: 90, limit: MAX_FLIGHT_TIME_90_DAYS },
+                        { days: 365, limit: MAX_FLIGHT_TIME_365_DAYS }
+                    ];
+
+                    for (const period of lookbackPeriods) {
+                        const startDate = new Date(proposedStart);
+                        startDate.setDate(startDate.getDate() - period.days);
+                        
+                        const totalPastHours = pilotHistory
+                            .filter(entry => {
+                                const entryDate = new Date(entry.departureTime);
+                                return entryDate >= startDate && entryDate < proposedStart;
+                            })
+                            .reduce((sum, entry) => sum + (entry.flightLogTime?.flight || 0), 0);
+                        
+                        const futureTotal = totalPastHours + proposedFT;
+
+                        if (futureTotal > period.limit) {
+                            results.push({ check: `${period.days}-Day Flight Time`, status: "VIOLATION", details: `Projected: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
+                        } else {
+                            results.push({ check: `${period.days}-Day Flight Time`, status: "OK", details: `Projected: ${futureTotal.toFixed(1)}h, Limit: ${period.limit}h` });
+                        }
+                    }
+                    
+                    setLegalityResult(results);
+                } catch(err) { 
+                    console.error("Legality Check Error:", err);
+                    setError("Failed to check legality. An unexpected error occurred.");
+                } finally { 
+                    setIsCheckingLegality(false); 
+                }
+            };
+            
+            const handleGenerateNote = async () => {
+                if (!legalityResult) {
+                    setError("Please run a legality check first.");
+                    return;
+                }
+                setIsGeneratingNote(true);
+                setGeminiNote('');
+                setError('');
+
+                const selectedPilot = pilots.find(p => p.id === selectedPilotId);
+                const summary = legalityResult.map(r => `- ${r.check}: ${r.status} (${r.details})`).join('\n');
+                const prompt = `Act as a flight dispatcher. Write a concise briefing note for a proposed duty for pilot ${selectedPilot?.name || 'N/A'}.
+Proposed Duty Details:
+- Date: ${proposedDutyDate}
+- Start Time (UTC): ${proposedStartTime}
+- End Time (UTC): ${proposedEndTime}
+- Proposed Flight Hours: ${proposedFlightTime}
+Legality Check Summary:
+${summary}
+Based on the summary, provide a clear, one-paragraph recommendation or a note of caution for the scheduler. Be professional and direct.`;
+
+                // This section now calls the Gemini API directly.
+                const apiKey = ""; // The environment will provide the key
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+                
+                const payload = {
+                    contents: [{
+                        role: "user",
+                        parts: [{ text: prompt }]
+                    }]
+                };
+
+                try {
+                    const response = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error?.message || `API Error: ${response.status}`);
+                    }
+                    
+                    const result = await response.json();
+                    
+                    if (result.candidates?.[0]?.content?.parts?.[0]?.text) {
+                        setGeminiNote(result.candidates[0].content.parts[0].text);
+                    } else {
+                        throw new Error("Invalid response structure from the AI service.");
+                    }
+                } catch (err) {
+                    console.error("Error calling Gemini API:", err);
+                    setError(`Failed to generate note: ${err.message}`);
+                } finally {
+                    setIsGeneratingNote(false);
+                }
+            };
+
+            const handleTrackLive = async (flight) => {
+                if (!flight || !flight.callSign) {
+                    setError("No callsign available for this flight to track.");
+                    return;
+                }
+                setIsTracking(true);
+                setLiveTrackingData(null);
+                setShowTrackingModal(true);
+                setError('');
+
+                try {
+                    const endpoint = `${API_BASE_URL}/api/track/${flight.callSign}`;
+                    const response = await fetch(endpoint);
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(data.details || data.message || "Failed to fetch tracking data.");
+                    }
+
+                    if (data.states && data.states.length > 0) {
+                        const flightState = data.states[0];
+                        setLiveTrackingData({
+                            callsign: flightState[1].trim(),
+                            origin: flightState[2],
+                            longitude: flightState[5],
+                            latitude: flightState[6],
+                            altitude: flightState[7] ? Math.round(flightState[7] * 3.28084) : 'N/A',
+                            on_ground: flightState[8],
+                            velocity: flightState[9] ? `${(flightState[9] * 1.94384).toFixed(0)} kts` : 'N/A',
+                            vertical_rate: flightState[11] ? `${(flightState[11] * 196.85).toFixed(0)} fpm` : 'N/A'
+                        });
+                    } else {
+                        setLiveTrackingData({ error: "No live ADSB data found for this callsign. The flight may have already landed or is not yet transmitting." });
+                    }
+                } catch (err) {
+                    console.error("Error tracking flight:", err);
+                    setLiveTrackingData({ error: `Could not track flight: ${err.message}` });
+                } finally {
+                    setIsTracking(false);
+                }
+            };
+
+
+            // --- Render Logic ---
+
+            if (!isAuthReady) {
+                return (
+                    <div className="flex items-center justify-center min-h-screen text-white text-xl">
+                        Initializing Dashboard...
+                    </div>
+                );
             }
-          };
 
-          const handleTrackLive = async (flight) => {
-              if (!flight || !flight.callSign) {
-                  setError("No callsign available for this flight to track.");
-                  return;
-              }
-              setIsTracking(true);
-              setLiveTrackingData(null);
-              setShowTrackingModal(true);
-              setError('');
-
-              try {
-                  const endpoint = `${API_BASE_URL}/api/track/${flight.callSign}`;
-                  const response = await fetch(endpoint);
-                  const data = await response.json();
-
-                  if (!response.ok) {
-                      throw new Error(data.details || data.message || "Failed to fetch tracking data.");
-                  }
-
-                  if (data.states && data.states.length > 0) {
-                      const flightState = data.states[0];
-                      setLiveTrackingData({
-                          callsign: flightState[1].trim(),
-                          origin: flightState[2],
-                          longitude: flightState[5],
-                          latitude: flightState[6],
-                          altitude: flightState[7] || 'N/A',
-                          on_ground: flightState[8],
-                          velocity: flightState[9] ? (flightState[9] * 1.94384).toFixed(0) + ' kts' : 'N/A', // m/s to knots
-                          vertical_rate: flightState[11] ? (flightState[11] * 196.85).toFixed(0) + ' fpm' : 'N/A' // m/s to fpm
-                      });
-                  } else {
-                      setLiveTrackingData({ error: "No live ADSB data found for this callsign." });
-                  }
-              } catch (err) {
-                  console.error("Error tracking flight:", err);
-                  setLiveTrackingData({ error: `Could not track flight: ${err.message}` });
-              } finally {
-                  setIsTracking(false);
-              }
-          };
-          
-          if (!isAuthReady) {
-              return <div className="flex items-center justify-center min-h-screen text-white">Loading...</div>;
-          }
-
-          if (!user) {
-              return <LoginScreen auth={auth} setError={setError} error={error} />;
-          }
-
-          const displayedFlights = allApiFlights.filter(flight => 
-              flight.crew?.some(c => c.crewId === selectedPilotId)
-          ).sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
-
-          return (
-            <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 font-sans p-4 md:p-8">
-              <header className="mb-8 text-center relative">
-                <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Flight Operations Dashboard</h1>
-                <p className="text-slate-400 text-sm mt-1">Logged in as: {user.email}</p>
-                <div className="absolute top-0 right-0">
-                    <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md">
-                        Sign Out
-                    </button>
-                </div>
-              </header>
-              {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
-              
-              <div className="mb-6 p-6 bg-slate-800 rounded-xl shadow-2xl">
-                  <h2 className="text-xl font-semibold mb-4 text-sky-400 text-center">Sync Flight Data</h2>
-                  <div className="flex flex-col sm:flex-row justify-center items-end gap-4">
-                      <div>
-                          <label htmlFor="apiFromDate" className="block text-sm font-medium text-slate-300">From</label>
-                          <input type="date" id="apiFromDate" value={apiFromDate} onChange={e => setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg"/>
-                      </div>
-                      <div>
-                          <label htmlFor="apiToDate" className="block text-sm font-medium text-slate-300">To</label>
-                          <input type="date" id="apiToDate" value={apiToDate} onChange={e => setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg"/>
-                      </div>
-                      <button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-500 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isApiLoading}>
-                          {isApiLoading ? 'Syncing...' : 'Sync Flights from API'}
-                      </button>
-                  </div>
-                   {apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-1 space-y-6">
-                    <div className="p-6 bg-slate-800 rounded-xl shadow-2xl">
-                        <h2 className="text-xl font-semibold mb-4 text-sky-400">Select Pilot</h2>
-                         <select value={selectedPilotId} onChange={(e) => setSelectedPilotId(e.target.value)} className="bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>
-                            {pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync flights to populate pilots</option>}
-                        </select>
-                    </div>
-                </div>
-
-                <div className="lg:col-span-2 p-6 bg-slate-800 rounded-xl shadow-2xl">
-                    <h2 className="text-xl font-semibold mb-4 text-sky-400">Flight Log for: <span className="font-bold">{pilots.find(p=>p.id === selectedPilotId)?.name || '...'}</span></h2>
-                     <div className="overflow-x-auto max-h-[60vh]">
-                        <table className="min-w-full divide-y divide-slate-700">
-                            <thead className="bg-slate-700/50 sticky top-0">
-                            <tr>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Date & Time (UTC)</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Call Sign</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Route</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Aircraft</th>
-                                <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Actions</th>
-                            </tr>
-                            </thead>
-                            <tbody className="bg-slate-800 divide-y divide-slate-700">
-                            {displayedFlights.length > 0 ? displayedFlights.map(flight => (
-                                <tr key={flight.flightId} className="hover:bg-slate-700/70">
-                                <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{formatDateTime(flight.departureTime)}</td>
-                                <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.callSign || 'N/A'}</td>
-                                <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{flight.departure} {'->'} {flight.destination}</td>
-                                <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.aircraftRegistration}</td>
-                                <td className="px-4 py-4 whitespace-nowrap text-sm">
-                                    <button onClick={() => handleTrackLive(flight)} className="text-sky-400 hover:text-sky-300 font-semibold" disabled={!flight.callSign}>Track Live</button>
-                                </td>
-                                </tr>
-                            )) : (
-                                <tr><td colSpan="5" className="px-4 py-5 text-center text-slate-400 italic">No flights to display for selected pilot.</td></tr>
-                            )}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-              </div>
-              
-              {showTrackingModal && (
-                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                    <div className="bg-slate-800 p-6 rounded-xl shadow-2xl w-full max-w-lg">
-                        <div className="flex justify-between items-center mb-4">
-                            <h3 className="text-2xl font-semibold text-sky-400">Live Flight Tracking</h3>
-                            <button onClick={() => setShowTrackingModal(false)} className="text-slate-400 hover:text-slate-200 text-2xl font-bold">&times;</button>
+            if (!user) {
+                return (
+                     <div className="flex items-center justify-center min-h-screen">
+                        <div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl text-center">
+                            <h2 className="text-3xl font-bold text-sky-400">Authentication Required</h2>
+                            <p className="text-slate-400">There was an issue authenticating your session. Please ensure you have access and try refreshing the page.</p>
+                            {error && <div className="bg-red-500/20 text-red-300 p-3 rounded-lg">{error}</div>}
                         </div>
-                        {isTracking && <div className="text-center p-8">Searching for live ADSB data...</div>}
-                        {!isTracking && liveTrackingData && (
-                            <div className="space-y-2">
-                                {liveTrackingData.error ? (
-                                    <p className="text-yellow-400">{liveTrackingData.error}</p>
-                                ) : (
-                                    <div className="text-lg">
-                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Callsign:</strong> {liveTrackingData.callsign}</p>
-                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Status:</strong> {liveTrackingData.on_ground ? "On Ground" : "In Air"}</p>
-                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Latitude:</strong> {liveTrackingData.latitude}</p>
-                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Longitude:</strong> {liveTrackingData.longitude}</p>
-                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Altitude:</strong> {liveTrackingData.altitude} ft</p>
-                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Ground Speed:</strong> {liveTrackingData.velocity}</p>
-                                        <p><strong className="font-semibold text-slate-400 w-32 inline-block">Vertical Rate:</strong> {liveTrackingData.vertical_rate}</p>
+                    </div>
+                );
+            }
+            
+            const displayedFlights = allApiFlights
+                .filter(flight => flight.crew?.some(c => c.crewId === selectedPilotId))
+                .sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 text-slate-100 p-4 md:p-8">
+                    <header className="mb-8 text-center relative">
+                        <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Flight Operations Dashboard</h1>
+                        <p className="text-slate-400 text-sm mt-1">
+                            User ID: <span className="font-mono text-xs">{user.uid}</span>
+                        </p>
+                        <div className="absolute top-0 right-0">
+                            <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors">
+                                Sign Out
+                            </button>
+                        </div>
+                    </header>
+                    {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
+                    
+                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
+                        <h2 className="text-xl font-semibold mb-4 text-sky-400 text-center">Sync Flight Data</h2>
+                        <div className="flex flex-col sm:flex-row justify-center items-end gap-4">
+                            <div>
+                                <label htmlFor="apiFromDate" className="block text-sm font-medium text-slate-300">From</label>
+                                <input type="date" id="apiFromDate" value={apiFromDate} onChange={e => setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg p-2"/>
+                            </div>
+                            <div>
+                                <label htmlFor="apiToDate" className="block text-sm font-medium text-slate-300">To</label>
+                                <input type="date" id="apiToDate" value={apiToDate} onChange={e => setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 text-slate-100 sm:text-sm rounded-lg p-2"/>
+                            </div>
+                            <button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled={isApiLoading}>
+                                {isApiLoading ? 'Syncing...' : 'Sync Flights'}
+                            </button>
+                        </div>
+                         {apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}
+                    </div>
+                    
+                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
+                      <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status Dashboard</h2>
+                      <div className="overflow-x-auto">
+                          <table className="min-w-full divide-y divide-slate-700">
+                              <thead className="bg-slate-700/50">
+                                  <tr>
+                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Pilot</th>
+                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 28 Days</th>
+                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 90 Days</th>
+                                      <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Last 365 Days</th>
+                                  </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-700">
+                                  {dashboardData.length > 0 ? dashboardData.map(pilotStats => {
+                                      const p28 = (pilotStats.total28 / MAX_FLIGHT_TIME_28_DAYS) * 100;
+                                      const p90 = (pilotStats.total90 / MAX_FLIGHT_TIME_90_DAYS) * 100;
+                                      const p365 = (pilotStats.total365 / MAX_FLIGHT_TIME_365_DAYS) * 100;
+                                      const getColor = (percentage) => {
+                                          if (percentage > 90) return 'text-red-400';
+                                          if (percentage > 75) return 'text-yellow-400';
+                                          return 'text-green-400';
+                                      };
+                                      return (
+                                          <tr key={pilotStats.pilotId} className="hover:bg-slate-800">
+                                              <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-slate-200">{pilotStats.name}</td>
+                                              <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p28)}`}>{pilotStats.total28.toFixed(1)} / {MAX_FLIGHT_TIME_28_DAYS}h</td>
+                                              <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p90)}`}>{pilotStats.total90.toFixed(1)} / {MAX_FLIGHT_TIME_90_DAYS}h</td>
+                                              <td className={`px-4 py-4 whitespace-nowrap text-sm font-semibold ${getColor(p365)}`}>{pilotStats.total365.toFixed(1)} / {MAX_FLIGHT_TIME_365_DAYS}h</td>
+                                          </tr>
+                                      )
+                                  }) : (
+                                      <tr><td colSpan="4" className="px-4 py-5 text-center text-slate-400 italic">No pilot data to display. Sync from API to populate.</td></tr>
+                                  )}
+                              </tbody>
+                          </table>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-1 space-y-6">
+                            {/* Legality Checker */}
+                            <div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4">
+                                <h2 className="text-xl font-semibold text-sky-400">Legality & Briefing Tool</h2>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-300">Select Pilot</label>
+                                    <select value={selectedPilotId} onChange={(e) => { setSelectedPilotId(e.target.value); setLegalityResult(null); setGeminiNote('') }} className="mt-1 bg-slate-700 border border-slate-600 text-slate-100 text-sm rounded-lg block w-full p-2.5" disabled={!pilots.length}>
+                                        {pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync flights to populate pilots</option>}
+                                    </select>
+                                </div>
+                                <div className="pt-4 border-t border-slate-700">
+                                  <h3 className="text-lg font-semibold text-slate-300 mb-2">Propose Future Duty</h3>
+                                  <div>
+                                      <label className="block text-sm font-medium text-slate-300">Date</label>
+                                      <input type="date" value={proposedDutyDate} onChange={e => setProposedDutyDate(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
+                                  </div>
+                                  <div className="flex gap-4 mt-2">
+                                      <div className="flex-1">
+                                          <label className="block text-sm font-medium text-slate-300">Start (UTC)</label>
+                                          <input type="time" value={proposedStartTime} onChange={e => setProposedStartTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
+                                      </div>
+                                       <div className="flex-1">
+                                          <label className="block text-sm font-medium text-slate-300">End (UTC)</label>
+                                          <input type="time" value={proposedEndTime} onChange={e => setProposedEndTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
+                                      </div>
+                                  </div>
+                                  <div className="mt-2">
+                                      <label className="block text-sm font-medium text-slate-300">Flight Time (Hours)</label>
+                                      <input type="number" step="0.1" value={proposedFlightTime} onChange={e => setProposedFlightTime(e.target.value)} className="mt-1 bg-slate-700 border-slate-600 w-full p-2 rounded-md"/>
+                                  </div>
+                                </div>
+                                 <button onClick={handleLegalityCheck} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg transition-colors disabled:opacity-50" disabled={isCheckingLegality || !selectedPilotId}>
+                                    {isCheckingLegality ? 'Checking...' : 'Check Legality'}
+                                </button>
+                                {legalityResult && (
+                                    <div className="mt-4 pt-4 border-t border-slate-700/50">
+                                        <h3 className="font-bold text-lg mb-2">Legality Results:</h3>
+                                        <ul className="space-y-1">
+                                            {legalityResult.map((res, index) => (
+                                                <li key={index} className={`flex justify-between p-2 rounded-md text-sm ${res.status === 'OK' ? 'bg-green-500/10 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+                                                    <span className="font-semibold">{res.check}:</span>
+                                                    <span>{res.details}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                        <button onClick={handleGenerateNote} disabled={isGeneratingNote} className="w-full mt-4 bg-amber-500 hover:bg-amber-600 text-slate-900 font-bold py-2.5 px-6 rounded-lg shadow-lg disabled:opacity-50 transition-colors">
+                                            {isGeneratingNote ? 'Generating...' : '✨ Generate Briefing Note'}
+                                        </button>
+                                    </div>
+                                )}
+                                {geminiNote && (
+                                     <div className="mt-4 p-4 bg-slate-900/70 rounded-lg">
+                                        <h3 className="font-bold text-lg mb-2 text-amber-400">AI Briefing Note:</h3>
+                                        <p className="text-slate-300 whitespace-pre-wrap text-sm">{geminiNote}</p>
                                     </div>
                                 )}
                             </div>
-                        )}
+                        </div>
+
+                        {/* Flight Log Table */}
+                        <div className="lg:col-span-2 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
+                            <h2 className="text-xl font-semibold mb-4 text-sky-400">Flight Log for: <span className="font-bold">{pilots.find(p=>p.id === selectedPilotId)?.name || '...'}</span></h2>
+                             <div className="overflow-auto max-h-[75vh] custom-scrollbar">
+                                <table className="min-w-full divide-y divide-slate-700">
+                                    <thead className="bg-slate-700/50 sticky top-0 backdrop-blur-sm">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Date & Time (UTC)</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Call Sign</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Route</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Aircraft</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-slate-300 uppercase tracking-wider">Actions</th>
+                                    </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-700">
+                                    {displayedFlights.length > 0 ? displayedFlights.map(flight => (
+                                        <tr key={flight.flightId} className="hover:bg-slate-800">
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{formatDateTime(flight.departureTime)}</td>
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300 font-mono">{flight.callSign || 'N/A'}</td>
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-200">{flight.departure} {'->'} {flight.destination}</td>
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-300">{flight.aircraftRegistration}</td>
+                                        <td className="px-4 py-4 whitespace-nowrap text-sm">
+                                            <button onClick={() => handleTrackLive(flight)} className="text-sky-400 hover:text-sky-300 font-semibold disabled:text-slate-500 disabled:cursor-not-allowed" disabled={!flight.callSign || flight.callSign.trim() === ''}>Track Live</button>
+                                        </td>
+                                        </tr>
+                                    )) : (
+                                        <tr><td colSpan="5" className="px-4 py-5 text-center text-slate-400 italic">No flights to display for selected pilot.</td></tr>
+                                    )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
+
+                      {showTrackingModal && (
+                        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                            <div className="bg-slate-800 p-6 rounded-xl shadow-2xl w-full max-w-lg border border-slate-700">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="text-2xl font-semibold text-sky-400">Live Flight Tracking</h3>
+                                    <button onClick={() => setShowTrackingModal(false)} className="text-slate-400 hover:text-slate-200 text-2xl font-bold">&times;</button>
+                                </div>
+                                {isTracking && <div className="text-center p-8 text-slate-300">Searching for live ADSB data...</div>}
+                                {!isTracking && liveTrackingData && (
+                                    <div className="space-y-2">
+                                        {liveTrackingData.error ? (
+                                            <p className="text-yellow-400">{liveTrackingData.error}</p>
+                                        ) : (
+                                            <div className="text-lg grid grid-cols-2 gap-x-4 gap-y-2">
+                                                <strong className="font-semibold text-slate-400">Callsign:</strong> <span className="font-mono">{liveTrackingData.callsign}</span>
+                                                <strong className="font-semibold text-slate-400">Status:</strong> <span className={liveTrackingData.on_ground ? 'text-yellow-400' : 'text-green-400'}>{liveTrackingData.on_ground ? "On Ground" : "In Air"}</span>
+                                                <strong className="font-semibold text-slate-400">Latitude:</strong> <span>{liveTrackingData.latitude}</span>
+                                                <strong className="font-semibold text-slate-400">Longitude:</strong> <span>{liveTrackingData.longitude}</span>
+                                                <strong className="font-semibold text-slate-400">Altitude:</strong> <span>{liveTrackingData.altitude} ft</span>
+                                                <strong className="font-semibold text-slate-400">Ground Speed:</strong> <span>{liveTrackingData.velocity}</span>
+                                                <strong className="font-semibold text-slate-400">Vertical Rate:</strong> <span>{liveTrackingData.vertical_rate}</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                      )}
                 </div>
-              )}
-            </div>
-          );
+            );
         }
 
         const container = document.getElementById('root');
         const root = ReactDOM.createRoot(container);
         root.render(<App />);
+
     </script>
 </body>
 </html>
