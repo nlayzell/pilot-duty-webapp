@@ -21,9 +21,8 @@
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useCallback } = React;
         
-        // --- Configuration ---
         const firebaseConfig = {
           apiKey: "AIzaSyBj6LK7FIgolevRztQ4z78YY4d9F1dlDyg",
           authDomain: "flight-duty-tracker-fbeae.firebaseapp.com",
@@ -38,7 +37,6 @@
         const MAX_FLIGHT_TIME_365_DAYS = 1000; 
         const MIN_REST_AWAY_FROM_BASE = 10;
 
-        // --- Helper Functions ---
         const formatDateTime = (dateString) => {
           if (!dateString) return 'N/A';
           return new Date(dateString).toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
@@ -108,7 +106,7 @@
           });
           const [apiToDate, setApiToDate] = useState(formatDate(new Date()));
           const [isApiLoading, setIsApiLoading] = useState(false);
-          const [apiMessage, setApiMessage] = useState('');
+          const [apiMessage, setApiMessage] = useState('Sync from the API to get started.');
           const [error, setError] = useState('');
           const [legalityResult, setLegalityResult] = useState(null);
           const [isCheckingLegality, setIsCheckingLegality] = useState(false);
@@ -248,11 +246,12 @@
 
                 const lastFlight = pilotHistory
                   .filter(f => f.flightLogTime?.timeIn || f.arrivalTime)
-                  .map(f => ({ dutyEndTimestamp: new Date(f.flightLogTime?.timeIn || f.arrivalTime) }))
-                  .sort((a,b) => b.dutyEndTimestamp.getTime() - a.dutyEndTimestamp.getTime())[0];
+                  .map(f => new Date(f.flightLogTime?.timeIn || f.arrivalTime))
+                  .filter(d => !isNaN(d))
+                  .sort((a,b) => b.getTime() - a.getTime())[0];
 
-                if (lastFlight && lastFlight.dutyEndTimestamp instanceof Date && !isNaN(lastFlight.dutyEndTimestamp)) {
-                    const restInHours = (proposedStart.getTime() - lastFlight.dutyEndTimestamp.getTime()) / (1000 * 60 * 60);
+                if (lastFlight) {
+                    const restInHours = (proposedStart.getTime() - lastFlight.getTime()) / (1000 * 60 * 60);
                     if(restInHours < MIN_REST_AWAY_FROM_BASE) {
                         results.push({ check: "Minimum Rest", status: "VIOLATION", details: `Required: ${MIN_REST_AWAY_FROM_BASE}h, Actual: ${restInHours.toFixed(1)}h`});
                     } else {
@@ -415,13 +414,11 @@
                                 const p28 = (pilotStats.total28 / MAX_FLIGHT_TIME_28_DAYS) * 100;
                                 const p90 = (pilotStats.total90 / MAX_FLIGHT_TIME_90_DAYS) * 100;
                                 const p365 = (pilotStats.total365 / MAX_FLIGHT_TIME_365_DAYS) * 100;
-
                                 const getColor = (percentage) => {
                                     if (percentage > 90) return 'text-red-400';
                                     if (percentage > 75) return 'text-yellow-400';
                                     return 'text-green-400';
                                 };
-
                                 return (
                                     <tr key={pilotStats.pilotId}>
                                         <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-slate-200">{pilotStats.name}</td>
