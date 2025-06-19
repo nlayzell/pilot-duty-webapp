@@ -10,7 +10,6 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
-    {/* Added Leaflet for mapping flight paths */}
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
@@ -32,34 +31,24 @@
 <body class="bg-slate-900 text-slate-200">
     <div id="root"></div>
 
-    <script type="module">
-        // This is a critical step for debugging the Vercel environment.
-        // It captures the raw environment variables before React loads.
-        console.log("Raw __firebase_config from environment:", typeof __firebase_config, __firebase_config);
-        console.log("Raw __initial_auth_token from environment:", typeof __initial_auth_token, __initial_auth_token);
-
-        let parsedConfig = null;
-        try {
-            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-                parsedConfig = JSON.parse(__firebase_config);
-            }
-        } catch (e) {
-            console.error("Failed to parse __firebase_config:", e);
-        }
-
-        window.appConfig = {
-            firebaseConfig: parsedConfig,
-            initialAuthToken: typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null
-        };
-        
-        console.log("Processed window.appConfig:", window.appConfig);
-    </script>
-
     <script type="text/babel" data-type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithCustomToken, signInAnonymously, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
         const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- Configuration ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBj6LK7FIgolevRztQ4z78YY4d9F1dlDyg",
+            authDomain: "flight-duty-tracker-fbeae.firebaseapp.com",
+            projectId: "flight-duty-tracker-fbeae",
+            storageBucket: "flight-duty-tracker-fbeae.appspot.com",
+            messagingSenderId: "430097302817",
+            appId: "1:430097302817:web:ed0594f45931dc84dc6a60",
+            measurementId: "G-9B7KL71S9E"
+        };
+        
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         const API_BASE_URL = "https://flight-duty-proxy.onrender.com";
         const MAX_FLIGHT_TIME_28_DAYS = 112;
@@ -106,11 +95,8 @@
             });
 
             useEffect(() => {
-                const { firebaseConfig, initialAuthToken } = window.appConfig;
-                
-                // The most important debugging step: check if the config is valid.
-                if (!firebaseConfig || typeof firebaseConfig !== 'object' || !firebaseConfig.apiKey) {
-                    setError("Firebase configuration is missing or invalid.");
+                if (!firebaseConfig || !firebaseConfig.apiKey) {
+                    setError("Firebase configuration is missing.");
                     setIsAuthReady(true);
                     return; 
                 }
@@ -122,12 +108,29 @@
                     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
                         if (currentUser) {
                             setUser(currentUser);
-                        } else if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken);
+                            setIsAuthReady(true);
                         } else {
-                            await signInAnonymously(auth);
+                            // No user, attempt sign-in
+                            try {
+                                if (initialAuthToken) {
+                                    await signInWithCustomToken(auth, initialAuthToken);
+                                } else {
+                                    // If no token, sign in anonymously by default
+                                    await signInAnonymously(auth);
+                                }
+                            } catch (e) {
+                                console.error("Initial sign-in failed:", e.code);
+                                // This is the fix: if custom token fails, fall back to anonymous sign-in.
+                                try {
+                                    console.log("Falling back to anonymous sign-in.");
+                                    await signInAnonymously(auth);
+                                } catch (anonError) {
+                                    console.error("Fallback anonymous sign-in also failed:", anonError);
+                                    setError("Could not establish an authenticated session.");
+                                    setIsAuthReady(true); 
+                                }
+                            }
                         }
-                        setIsAuthReady(true);
                     });
                     return () => unsubscribe();
                 } catch (e) { console.error("Firebase Initialization Error:", e); setError("Could not initialize Firebase."); setIsAuthReady(true); }
