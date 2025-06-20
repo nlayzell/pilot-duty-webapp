@@ -55,6 +55,17 @@
         const MAX_FLIGHT_TIME_90_DAYS = 300;
         const MAX_FLIGHT_TIME_365_DAYS = 1000;
         const MIN_REST_AWAY_FROM_BASE = 10;
+
+        // --- Airport Coordinate Data ---
+        // A simple lookup for airport coordinates. This can be expanded.
+        const airportCoordinates = {
+            'CYHM': { lat: 43.1736, lon: -79.935 },
+            'CYYZ': { lat: 43.6777, lon: -79.6248 },
+            'CYUL': { lat: 45.4706, lon: -73.7408 },
+            'KORD': { lat: 41.9742, lon: -87.9073 },
+            'KJFK': { lat: 40.6413, lon: -73.7781 },
+            'CYVR': { lat: 49.1939, lon: -123.1843 },
+        };
         
         const formatDateTime = (dateString) => {
             if (!dateString) return 'N/A';
@@ -83,15 +94,19 @@
             const [proposedStartTime, setProposedStartTime] = useState('09:00');
             const [proposedEndTime, setProposedEndTime] = useState('17:00');
             const [proposedFlightTime, setProposedFlightTime] = useState('6');
-            const [geminiNote, setGeminiNote] = useState('');
-            const [isGeneratingNote, setIsGeneratingNote] = useState(false);
             const [fleetStates, setFleetStates] = useState([]);
             const [isMapLoading, setIsMapLoading] = useState(false);
             const [mapMessage, setMapMessage] = useState('Sync flights to see live fleet data.');
             const fleetMapRef = useRef(null);
             const markerRef = useRef({});
-            const planeIcon = L.divIcon({
+
+            // --- Map Icons ---
+            const livePlaneIcon = L.divIcon({
                 html: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-sky-400"><path d="M2 21h20L12 2 2 21z" transform="rotate(-45 12 12)"></path></svg>`,
+                className: '', iconSize: [24, 24], iconAnchor: [12, 12]
+            });
+            const groundedPlaneIcon = L.divIcon({
+                html: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500"><path d="M2 21h20L12 2 2 21z" transform="rotate(-45 12 12)"></path></svg>`,
                 className: '', iconSize: [24, 24], iconAnchor: [12, 12]
             });
 
@@ -117,11 +132,9 @@
                                     await signInAnonymously(auth);
                                 }
                             } catch (e) {
-                                console.error("Initial sign-in failed:", e.code);
                                 try {
                                     await signInAnonymously(auth);
                                 } catch (anonError) {
-                                    console.error("Fallback anonymous sign-in also failed:", anonError);
                                     setError("Could not establish an authenticated session.");
                                     setIsAuthReady(true); 
                                 }
@@ -129,9 +142,10 @@
                         }
                     });
                     return () => unsubscribe();
-                } catch (e) { console.error("Firebase Initialization Error:", e); setError("Could not initialize Firebase."); setIsAuthReady(true); }
+                } catch (e) { setError("Could not initialize Firebase."); setIsAuthReady(true); }
             }, []);
             
+            // Memoized calculation of crew duty stats
             const dashboardData = useMemo(() => {
                 if (!allApiFlights.length || !pilots.length) return [];
                 const now = new Date();
@@ -146,70 +160,86 @@
                 });
             }, [allApiFlights, pilots]);
 
+            // Core logic to fetch live and inferred aircraft positions
             const fetchFleetStates = async () => {
                 if (!allApiFlights.length) {
                     setFleetStates([]);
                     setMapMessage('Sync flights to see live fleet data.');
                     return;
                 }
-                const uniqueFlights = [];
-                const seenIcaos = new Set();
-                const sortedFlights = [...allApiFlights].sort((a,b) => new Date(b.departureTime) - new Date(a.departureTime));
-                for (const f of sortedFlights) {
-                    if (f.icao24 && f.callSign && !seenIcaos.has(f.icao24)) {
-                        uniqueFlights.push(f);
-                        seenIcaos.add(f.icao24);
-                    }
-                }
+                
+                const uniqueAircraft = Array.from(new Set(allApiFlights.map(f => f.icao24).filter(Boolean)))
+                    .map(icao => allApiFlights.findLast(f => f.icao24 === icao));
 
-                if (!uniqueFlights.length) {
+                if (!uniqueAircraft.length) {
                     setMapMessage('No aircraft with trackable IDs found in the synced flight data.');
                     return;
                 }
 
                 setIsMapLoading(true);
-                setMapMessage(`Searching for ${uniqueFlights.length} aircraft...`);
-                
-                try {
-                    const promises = uniqueFlights.map(f => fetch(`${API_BASE_URL}/api/track/${f.callSign.trim()}`));
-                    const responses = await Promise.allSettled(promises);
-                    const states = [];
-                    let proxyError = false;
+                setMapMessage(`Searching for ${uniqueAircraft.length} aircraft...`);
 
+                try {
+                    const promises = uniqueAircraft.map(f => fetch(`${API_BASE_URL}/api/track/${f.callSign.trim()}`));
+                    const responses = await Promise.allSettled(promises);
+                    
+                    const liveStatesByIcao = new Map();
                     for (const res of responses) {
                         if (res.status === 'fulfilled' && res.value.ok) {
-                            const contentType = res.value.headers.get("content-type");
-                            if (contentType && contentType.includes("application/json")) {
-                                const data = await res.value.json();
-                                if (data.states && data.states.length > 0) {
-                                    states.push(...data.states);
-                                }
+                            const data = await res.value.json();
+                            if (data.states?.length > 0) {
+                                const state = data.states[0];
+                                liveStatesByIcao.set(state[0], state);
                             }
-                        } else {
-                             if(res.value?.status === 404) {
-                                proxyError = true;
-                             }
-                            console.warn(`Failed to fetch state for a callsign:`, res.reason || res.value.statusText);
                         }
                     }
-                    
-                    setFleetStates(states);
-                    
-                    if (proxyError) {
-                        setMapMessage('Error: Proxy server returned 404. Check your proxy endpoint for tracking.');
-                    } else if (states.length > 0) {
-                        setMapMessage(`${states.length} live aircraft found.`);
+
+                    const combinedStates = uniqueAircraft.map(aircraft => {
+                        const liveState = liveStatesByIcao.get(aircraft.icao24);
+                        if (liveState) {
+                            return {
+                                isLive: true,
+                                icao24: liveState[0],
+                                callsign: liveState[1]?.trim() || 'N/A',
+                                longitude: liveState[5],
+                                latitude: liveState[6],
+                                altitude: liveState[7],
+                                velocity: liveState[9],
+                            };
+                        } else {
+                            const lastFlight = allApiFlights
+                                .filter(f => f.icao24 === aircraft.icao24 && new Date(f.arrivalTime) < new Date())
+                                .sort((a,b) => new Date(b.arrivalTime) - new Date(a.arrivalTime))[0];
+
+                            if (lastFlight && airportCoordinates[lastFlight.destination]) {
+                                return {
+                                    isLive: false,
+                                    icao24: lastFlight.icao24,
+                                    callsign: lastFlight.callSign,
+                                    atAirport: lastFlight.destination,
+                                    latitude: airportCoordinates[lastFlight.destination].lat,
+                                    longitude: airportCoordinates[lastFlight.destination].lon,
+                                    lastSeen: lastFlight.arrivalTime,
+                                };
+                            }
+                        }
+                        return null; // No live or valid last known position
+                    }).filter(Boolean); // Filter out nulls
+
+                    setFleetStates(combinedStates);
+                    if (combinedStates.length > 0) {
+                        setMapMessage(`${combinedStates.length} aircraft positions found.`);
                     } else {
-                        setMapMessage('No live aircraft detected from your synced list. They may not be currently flying.');
+                        setMapMessage('No live or recently landed aircraft could be located.');
                     }
                 } catch (err) {
-                    console.error("Error fetching fleet data:", err);
                     setMapMessage('An error occurred while fetching fleet data.');
                 } finally {
                     setIsMapLoading(false);
                 }
             };
 
+            // Initialize map
             useEffect(() => {
                 if (isAuthReady && user && !fleetMapRef.current && document.getElementById('fleet-map')) {
                     fleetMapRef.current = L.map('fleet-map').setView([30, 0], 2);
@@ -220,21 +250,28 @@
                 }
             }, [isAuthReady, user]);
             
+            // Re-fetch states when synced flights change
             useEffect(() => { if (isAuthReady && user) fetchFleetStates(); }, [allApiFlights, isAuthReady, user]);
 
+            // Update map markers when states change
             useEffect(() => {
                 const map = fleetMapRef.current; if (!map) return;
                 Object.values(markerRef.current).forEach(m => map.removeLayer(m)); markerRef.current = {};
-                if (fleetStates.length > 0) {
-                    fleetStates.forEach(s => {
-                        const [icao, callsign, , , , lon, lat, alt, , vel] = s;
-                        if (lat && lon) {
-                            const marker = L.marker([lat, lon], { icon: planeIcon }).addTo(map)
-                                .bindPopup(`<b>${callsign?.trim()||'N/A'}</b><br>ICAO: ${icao}<br>Alt: ${alt?Math.round(alt*3.28084):'N/A'} ft<br>GS: ${vel?(vel*1.94384).toFixed(0):'N/A'} kts`);
-                            markerRef.current[icao] = marker;
+                
+                fleetStates.forEach(state => {
+                    const { icao24, latitude, longitude, isLive } = state;
+                    if (latitude && longitude) {
+                        const icon = isLive ? livePlaneIcon : groundedPlaneIcon;
+                        let popupContent = `<b>${state.callsign}</b><br>ICAO: ${icao24}`;
+                        if (isLive) {
+                            popupContent += `<br>Status: <span class="text-green-400">Live</span><br>Alt: ${state.altitude ? Math.round(state.altitude * 3.28084) : 'N/A'} ft<br>GS: ${state.velocity ? (state.velocity * 1.94384).toFixed(0) : 'N/A'} kts`;
+                        } else {
+                            popupContent += `<br>Status: <span class="text-slate-400">On Ground</span><br>Last seen: ${state.atAirport} at ${formatDateTime(state.lastSeen)}`;
                         }
-                    });
-                }
+                        const marker = L.marker([latitude, longitude], { icon }).addTo(map).bindPopup(popupContent);
+                        markerRef.current[icao24] = marker;
+                    }
+                });
             }, [fleetStates]);
 
             const handleSignOut = async () => { if(authInstance) try { await signOut(authInstance); setUser(null); } catch (e) { setError("Failed to sign out."); }};
@@ -260,7 +297,7 @@
             const handleCenterOnAircraft = (icao) => {
                 const map = fleetMapRef.current; const marker = markerRef.current[icao];
                 if (map && marker) { map.setView(marker.getLatLng(), 8); marker.openPopup(); } 
-                else { setError(`Aircraft ${icao} not live.`); setTimeout(() => setError(''), 5000); }
+                else { setError(`Aircraft ${icao} location not available.`); setTimeout(() => setError(''), 5000); }
             };
 
             if (!isAuthReady) return <div className="flex items-center justify-center min-h-screen text-white text-xl">Initializing...</div>;
@@ -273,11 +310,7 @@
                     <header className="mb-8 text-center relative">
                         <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Flight Operations Dashboard</h1>
                         <p className="text-slate-400 text-sm mt-1">User ID: <span className="font-mono text-xs">{user.uid}</span></p>
-                        <div className="absolute top-0 right-0 flex items-center gap-4">
-                           <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors">
-                                Sign Out
-                           </button>
-                        </div>
+                        <div className="absolute top-0 right-0"><button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors">Sign Out</button></div>
                     </header>
                     {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
                     
@@ -287,7 +320,7 @@
                            {(isMapLoading || mapMessage) && (
                                 <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
                                     <div className="bg-slate-900/80 text-white p-4 rounded-lg">
-                                        {isMapLoading ? 'Searching for live aircraft...' : mapMessage}
+                                        {isMapLoading ? 'Searching for aircraft...' : mapMessage}
                                     </div>
                                 </div>
                            )}
@@ -298,7 +331,7 @@
                     <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status</h2><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50"><tr><th className="px-4 py-3 text-left text-xs font-medium uppercase">Pilot</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 28d</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 90d</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 365d</th></tr></thead><tbody className="divide-y divide-slate-700">{dashboardData.length > 0 ? dashboardData.map(s => { const p28=(s.total28/112)*100, p90=(s.total90/300)*100, p365=(s.total365/1000)*100; const c=p=>p>90?'text-red-400':p>75?'text-yellow-400':'text-green-400'; return (<tr key={s.pilotId} className="hover:bg-slate-800"><td className="px-4 py-4">{s.name}</td><td className={`px-4 py-4 ${c(p28)}`}>{s.total28.toFixed(1)}/112h</td><td className={`px-4 py-4 ${c(p90)}`}>{s.total90.toFixed(1)}/300h</td><td className={`px-4 py-4 ${c(p365)}`}>{s.total365.toFixed(1)}/1000h</td></tr>)}) : (<tr><td colSpan="4" className="p-5 text-center italic">No data. Sync from API.</td></tr>)}</tbody></table></div></div>
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                         <div className="lg:col-span-2 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold mb-4 text-sky-400">Flight Log: <span className="font-bold">{pilots.find(p=>p.id===selectedPilotId)?.name||'...'}</span></h2><div className="overflow-auto max-h-[75vh] custom-scrollbar"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50 sticky top-0"><tr><th className="px-4 py-3 text-left text-xs font-medium uppercase">Date (UTC)</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Call Sign</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Route</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Aircraft</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Actions</th></tr></thead><tbody className="divide-y divide-slate-700">{displayedFlights.length>0?displayedFlights.map(f=>(<tr key={f.flightId} className="hover:bg-slate-800"><td className="p-4">{formatDateTime(f.departureTime)}</td><td className="p-4 font-mono">{f.callSign||'N/A'}</td><td className="p-4">{f.departure} {'->'} {f.destination}</td><td className="p-4">{f.aircraftRegistration}</td><td className="p-4"><button onClick={()=>handleCenterOnAircraft(f.icao24)} className="text-sky-400 hover:text-sky-300 font-semibold" disabled={!f.icao24}>Find on Map</button></td></tr>)):(<tr><td colSpan="5" className="p-5 text-center italic">No flights.</td></tr>)}</tbody></table></div></div>
-                        <div className="lg:col-span-1 space-y-6"><div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4"><h2 className="text-xl font-semibold text-sky-400">Legality & Briefing</h2><div><label className="block text-sm font-medium">Pilot</label><select value={selectedPilotId} onChange={e=>{setSelectedPilotId(e.target.value);setLegalityResult(null);setGeminiNote('')}} className="mt-1 bg-slate-700 border-slate-600 rounded-lg w-full p-2.5" disabled={!pilots.length}>{pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync to populate</option>}</select></div></div></div>
+                        <div className="lg:col-span-1 space-y-6"><div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4"><h2 className="text-xl font-semibold text-sky-400">Legality & Briefing</h2><div><label className="block text-sm font-medium">Pilot</label><select value={selectedPilotId} onChange={e=>{setSelectedPilotId(e.target.value);setLegalityResult(null);setLegalityResult(null)}} className="mt-1 bg-slate-700 border-slate-600 rounded-lg w-full p-2.5" disabled={!pilots.length}>{pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync to populate</option>}</select></div></div></div>
                     </div>
                 </div>
             );
