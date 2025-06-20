@@ -86,7 +86,7 @@
             const [geminiNote, setGeminiNote] = useState('');
             const [isGeneratingNote, setIsGeneratingNote] = useState(false);
             const [fleetStates, setFleetStates] = useState([]);
-            const [isMapLoading, setIsMapLoading] = useState(false); // Default to not loading
+            const [isMapLoading, setIsMapLoading] = useState(false);
             const [mapMessage, setMapMessage] = useState('Sync flights to see live fleet data.');
             const fleetMapRef = useRef(null);
             const markerRef = useRef({});
@@ -257,6 +257,19 @@
                 else { setError(`Aircraft ${icao} not live.`); setTimeout(() => setError(''), 5000); }
             };
 
+            // New handler for the test button
+            const handleTestLiveAircraft = () => {
+                const testFlight = {
+                    icao24: "a8b839", // ICAO24 for a specific Southwest B737
+                    callSign: "SWA123", // A common callsign pattern
+                    // Add other dummy data as needed
+                    departureTime: new Date().toISOString(),
+                    crew: [{ crewId: 'test@pilot.com', name: 'Test Pilot' }],
+                };
+                // Add the test flight to the list, this will trigger the useEffect to fetch its state
+                setAllApiFlights(prevFlights => [...prevFlights, testFlight]);
+            };
+
             if (!isAuthReady) return <div className="flex items-center justify-center min-h-screen text-white text-xl">Initializing...</div>;
             if (!user) return <div className="flex items-center justify-center min-h-screen"><div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl text-center"><h2 className="text-3xl font-bold text-sky-400">Authentication Required</h2><p className="text-slate-400">There was an issue authenticating.</p>{error && <div className="bg-red-500/20 text-red-300 p-3 mt-4 rounded-lg">{error}</div>}</div></div>;
             
@@ -267,7 +280,15 @@
                     <header className="mb-8 text-center relative">
                         <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Flight Operations Dashboard</h1>
                         <p className="text-slate-400 text-sm mt-1">User ID: <span className="font-mono text-xs">{user.uid}</span></p>
-                        <div className="absolute top-0 right-0"><button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors">Sign Out</button></div>
+                        <div className="absolute top-0 right-0 flex items-center gap-4">
+                           {/* Add the Test button here */}
+                           <button onClick={handleTestLiveAircraft} className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold py-2 px-4 rounded-lg shadow-md transition-colors">
+                                Test Live Aircraft
+                           </button>
+                           <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors">
+                                Sign Out
+                           </button>
+                        </div>
                     </header>
                     {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
                     
