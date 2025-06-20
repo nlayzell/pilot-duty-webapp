@@ -57,14 +57,30 @@
         const MIN_REST_AWAY_FROM_BASE = 10;
 
         // --- Airport Coordinate Data ---
-        // A simple lookup for airport coordinates. This can be expanded.
+        // Expanded list to include more major airports.
         const airportCoordinates = {
+            // Canada
             'CYHM': { lat: 43.1736, lon: -79.935 },
             'CYYZ': { lat: 43.6777, lon: -79.6248 },
             'CYUL': { lat: 45.4706, lon: -73.7408 },
+            'CYVR': { lat: 49.1939, lon: -123.1843 },
+            'CYYC': { lat: 51.1215, lon: -114.0202 },
+            'CYEG': { lat: 53.3097, lon: -113.5797 },
+            'CYOW': { lat: 45.3225, lon: -75.6692 },
+            'CYQB': { lat: 46.7911, lon: -71.3933 },
+            'CYHZ': { lat: 44.8808, lon: -63.5086 },
+            'CYWG': { lat: 49.9100, lon: -97.2399 },
+            // USA
             'KORD': { lat: 41.9742, lon: -87.9073 },
             'KJFK': { lat: 40.6413, lon: -73.7781 },
-            'CYVR': { lat: 49.1939, lon: -123.1843 },
+            'KLAX': { lat: 33.9416, lon: -118.4085 },
+            'KDFW': { lat: 32.8998, lon: -97.0403 },
+            'KDEN': { lat: 39.8561, lon: -104.6737 },
+            'KATL': { lat: 33.6407, lon: -84.4277 },
+            'KSEA': { lat: 47.4490, lon: -122.3093 },
+            'KMIA': { lat: 25.7959, lon: -80.2871 },
+            'KLAS': { lat: 36.0840, lon: -115.1537 },
+            'KPHX': { lat: 33.4343, lon: -112.0081 },
         };
         
         const formatDateTime = (dateString) => {
@@ -194,6 +210,7 @@
                         }
                     }
 
+                    const unlocatedAirports = new Set();
                     const combinedStates = uniqueAircraft.map(aircraft => {
                         const liveState = liveStatesByIcao.get(aircraft.icao24);
                         if (liveState) {
@@ -211,27 +228,43 @@
                                 .filter(f => f.icao24 === aircraft.icao24 && new Date(f.arrivalTime) < new Date())
                                 .sort((a,b) => new Date(b.arrivalTime) - new Date(a.arrivalTime))[0];
 
-                            if (lastFlight && airportCoordinates[lastFlight.destination]) {
-                                return {
-                                    isLive: false,
-                                    icao24: lastFlight.icao24,
-                                    callsign: lastFlight.callSign,
-                                    atAirport: lastFlight.destination,
-                                    latitude: airportCoordinates[lastFlight.destination].lat,
-                                    longitude: airportCoordinates[lastFlight.destination].lon,
-                                    lastSeen: lastFlight.arrivalTime,
-                                };
+                            if (lastFlight) {
+                                if (airportCoordinates[lastFlight.destination]) {
+                                    return {
+                                        isLive: false,
+                                        icao24: lastFlight.icao24,
+                                        callsign: lastFlight.callSign,
+                                        atAirport: lastFlight.destination,
+                                        latitude: airportCoordinates[lastFlight.destination].lat,
+                                        longitude: airportCoordinates[lastFlight.destination].lon,
+                                        lastSeen: lastFlight.arrivalTime,
+                                    };
+                                } else {
+                                    // If we can't find coordinates, add it to our unlocated list
+                                    unlocatedAirports.add(lastFlight.destination);
+                                }
                             }
                         }
                         return null; // No live or valid last known position
                     }).filter(Boolean); // Filter out nulls
 
                     setFleetStates(combinedStates);
-                    if (combinedStates.length > 0) {
-                        setMapMessage(`${combinedStates.length} aircraft positions found.`);
-                    } else {
-                        setMapMessage('No live or recently landed aircraft could be located.');
+
+                    // Smarter map messaging
+                    const liveCount = combinedStates.filter(s => s.isLive).length;
+                    const groundedCount = combinedStates.filter(s => !s.isLive).length;
+                    
+                    let message = '';
+                    if (liveCount > 0) message += `Found ${liveCount} live aircraft. `;
+                    if (groundedCount > 0) message += `Found ${groundedCount} grounded aircraft. `;
+                    if (unlocatedAirports.size > 0) {
+                        message += `Could not locate airports: ${Array.from(unlocatedAirports).join(', ')}.`;
                     }
+                    if (message === '') {
+                        message = 'No live or recently landed aircraft could be located.';
+                    }
+                    setMapMessage(message);
+
                 } catch (err) {
                     setMapMessage('An error occurred while fetching fleet data.');
                 } finally {
@@ -242,7 +275,7 @@
             // Initialize map
             useEffect(() => {
                 if (isAuthReady && user && !fleetMapRef.current && document.getElementById('fleet-map')) {
-                    fleetMapRef.current = L.map('fleet-map').setView([30, 0], 2);
+                    fleetMapRef.current = L.map('fleet-map').setView([45, -98], 4); // Center on North America
                     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20 }).addTo(fleetMapRef.current);
                     fetchFleetStates(); 
                     const id = setInterval(fetchFleetStates, 60000); 
