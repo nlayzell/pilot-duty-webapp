@@ -169,12 +169,13 @@
 
                 setIsMapLoading(true);
                 setMapMessage(`Searching for ${uniqueFlights.length} aircraft...`);
-                console.log(`Attempting to fetch live states for:`, uniqueFlights.map(f => ({callsign: f.callSign, icao24: f.icao24})));
-
+                
                 try {
                     const promises = uniqueFlights.map(f => fetch(`${API_BASE_URL}/api/track/${f.callSign.trim()}`));
                     const responses = await Promise.allSettled(promises);
                     const states = [];
+                    let proxyError = false;
+
                     for (const res of responses) {
                         if (res.status === 'fulfilled' && res.value.ok) {
                             const contentType = res.value.headers.get("content-type");
@@ -185,16 +186,21 @@
                                 }
                             }
                         } else {
+                             if(res.value?.status === 404) {
+                                proxyError = true;
+                             }
                             console.warn(`Failed to fetch state for a callsign:`, res.reason || res.value.statusText);
                         }
                     }
                     
                     setFleetStates(states);
-                    if (states.length > 0) {
+                    
+                    if (proxyError) {
+                        setMapMessage('Error: Proxy server returned 404. Check your proxy endpoint for tracking.');
+                    } else if (states.length > 0) {
                         setMapMessage(`${states.length} live aircraft found.`);
                     } else {
                         setMapMessage('No live aircraft detected from your synced list. They may not be currently flying.');
-                        console.log("No live states were found for any of the unique aircraft.");
                     }
                 } catch (err) {
                     console.error("Error fetching fleet data:", err);
@@ -257,19 +263,6 @@
                 else { setError(`Aircraft ${icao} not live.`); setTimeout(() => setError(''), 5000); }
             };
 
-            // New handler for the test button
-            const handleTestLiveAircraft = () => {
-                const testFlight = {
-                    icao24: "a8b839", // ICAO24 for a specific Southwest B737
-                    callSign: "SWA123", // A common callsign pattern
-                    // Add other dummy data as needed
-                    departureTime: new Date().toISOString(),
-                    crew: [{ crewId: 'test@pilot.com', name: 'Test Pilot' }],
-                };
-                // Add the test flight to the list, this will trigger the useEffect to fetch its state
-                setAllApiFlights(prevFlights => [...prevFlights, testFlight]);
-            };
-
             if (!isAuthReady) return <div className="flex items-center justify-center min-h-screen text-white text-xl">Initializing...</div>;
             if (!user) return <div className="flex items-center justify-center min-h-screen"><div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl text-center"><h2 className="text-3xl font-bold text-sky-400">Authentication Required</h2><p className="text-slate-400">There was an issue authenticating.</p>{error && <div className="bg-red-500/20 text-red-300 p-3 mt-4 rounded-lg">{error}</div>}</div></div>;
             
@@ -281,10 +274,6 @@
                         <h1 className="text-4xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-500">Flight Operations Dashboard</h1>
                         <p className="text-slate-400 text-sm mt-1">User ID: <span className="font-mono text-xs">{user.uid}</span></p>
                         <div className="absolute top-0 right-0 flex items-center gap-4">
-                           {/* Add the Test button here */}
-                           <button onClick={handleTestLiveAircraft} className="bg-yellow-500 hover:bg-yellow-600 text-slate-900 font-bold py-2 px-4 rounded-lg shadow-md transition-colors">
-                                Test Live Aircraft
-                           </button>
                            <button onClick={handleSignOut} className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-colors">
                                 Sign Out
                            </button>
@@ -295,7 +284,7 @@
                     <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
                         <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Live Fleet Map</h2>
                         <div id="fleet-map" className="relative">
-                           {(isMapLoading || (fleetStates.length === 0 && mapMessage)) && (
+                           {(isMapLoading || mapMessage) && (
                                 <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
                                     <div className="bg-slate-900/80 text-white p-4 rounded-lg">
                                         {isMapLoading ? 'Searching for live aircraft...' : mapMessage}
