@@ -57,30 +57,30 @@
         const MIN_REST_AWAY_FROM_BASE = 10;
 
         // --- Airport Coordinate Data ---
-        // Expanded list to include more major airports.
+        // Greatly expanded list of airports.
         const airportCoordinates = {
             // Canada
-            'CYHM': { lat: 43.1736, lon: -79.935 },
-            'CYYZ': { lat: 43.6777, lon: -79.6248 },
-            'CYUL': { lat: 45.4706, lon: -73.7408 },
-            'CYVR': { lat: 49.1939, lon: -123.1843 },
-            'CYYC': { lat: 51.1215, lon: -114.0202 },
-            'CYEG': { lat: 53.3097, lon: -113.5797 },
-            'CYOW': { lat: 45.3225, lon: -75.6692 },
-            'CYQB': { lat: 46.7911, lon: -71.3933 },
-            'CYHZ': { lat: 44.8808, lon: -63.5086 },
-            'CYWG': { lat: 49.9100, lon: -97.2399 },
+            'CYHM': { lat: 43.1736, lon: -79.935 }, 'CYYZ': { lat: 43.6777, lon: -79.6248 },
+            'CYUL': { lat: 45.4706, lon: -73.7408 }, 'CYVR': { lat: 49.1939, lon: -123.1843 },
+            'CYYC': { lat: 51.1215, lon: -114.0202 }, 'CYEG': { lat: 53.3097, lon: -113.5797 },
+            'CYOW': { lat: 45.3225, lon: -75.6692 }, 'CYQB': { lat: 46.7911, lon: -71.3933 },
+            'CYHZ': { lat: 44.8808, lon: -63.5086 }, 'CYWG': { lat: 49.9100, lon: -97.2399 },
+            'CYXE': { lat: 52.1708, lon: -106.6997 }, 'CYSJ': { lat: 45.3161, lon: -65.8903 },
+            'CYQQ': { lat: 49.9508, lon: -125.2708 },
             // USA
-            'KORD': { lat: 41.9742, lon: -87.9073 },
-            'KJFK': { lat: 40.6413, lon: -73.7781 },
-            'KLAX': { lat: 33.9416, lon: -118.4085 },
-            'KDFW': { lat: 32.8998, lon: -97.0403 },
-            'KDEN': { lat: 39.8561, lon: -104.6737 },
-            'KATL': { lat: 33.6407, lon: -84.4277 },
-            'KSEA': { lat: 47.4490, lon: -122.3093 },
-            'KMIA': { lat: 25.7959, lon: -80.2871 },
-            'KLAS': { lat: 36.0840, lon: -115.1537 },
-            'KPHX': { lat: 33.4343, lon: -112.0081 },
+            'KORD': { lat: 41.9742, lon: -87.9073 }, 'KJFK': { lat: 40.6413, lon: -73.7781 },
+            'KLAX': { lat: 33.9416, lon: -118.4085 }, 'KDFW': { lat: 32.8998, lon: -97.0403 },
+            'KDEN': { lat: 39.8561, lon: -104.6737 }, 'KATL': { lat: 33.6407, lon: -84.4277 },
+            'KSEA': { lat: 47.4490, lon: -122.3093 }, 'KMIA': { lat: 25.7959, lon: -80.2871 },
+            'KLAS': { lat: 36.0840, lon: -115.1537 }, 'KPHX': { lat: 33.4343, lon: -112.0081 },
+            'KSFO': { lat: 37.6213, lon: -122.3790 }, 'KEWR': { lat: 40.6925, lon: -74.1687 },
+            'KMCO': { lat: 28.4312, lon: -81.3081 }, 'KBOS': { lat: 42.3656, lon: -71.0096 },
+            // Europe
+            'EGLL': { lat: 51.4700, lon: -0.4543 }, // London Heathrow
+            'LFPG': { lat: 49.0097, lon: -2.5479 }, // Paris Charles de Gaulle
+            'EHAM': { lat: 52.3105, lon: -4.7683 }, // Amsterdam Schiphol
+            'EDDF': { lat: 50.0379, lon: -8.5622 }, // Frankfurt
+            'LEMD': { lat: 40.4983, lon: -3.5676 }, // Madrid Barajas
         };
         
         const formatDateTime = (dateString) => {
@@ -352,8 +352,8 @@
                         <div id="fleet-map" className="relative">
                            {(isMapLoading || mapMessage) && (
                                 <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
-                                    <div className="bg-slate-900/80 text-white p-4 rounded-lg">
-                                        {isMapLoading ? 'Searching for aircraft...' : mapMessage}
+                                    <div className="bg-slate-900/80 text-white p-4 rounded-lg text-center">
+                                        {isMapLoading ? 'Searching for aircraft...' : mapMessage.split('. ').map((msg, i) => <p key={i}>{msg}</p>)}
                                     </div>
                                 </div>
                            )}
