@@ -4,12 +4,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pilot Operations Dashboard</title>
+    
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for in-browser JSX compilation -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     
+    <!-- Leaflet Maps CSS & JS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
@@ -57,7 +66,6 @@
         const MIN_REST_AWAY_FROM_BASE = 10;
 
         // --- Airport Coordinate Data ---
-        // Greatly expanded list of airports.
         const airportCoordinates = {
             // Canada
             'CYHM': { lat: 43.1736, lon: -79.935 }, 'CYYZ': { lat: 43.6777, lon: -79.6248 },
@@ -96,20 +104,28 @@
             const [user, setUser] = useState(null);
             const [isAuthReady, setIsAuthReady] = useState(false);
             const [authInstance, setAuthInstance] = useState(null);
+            
+            // Data States
             const [allApiFlights, setAllApiFlights] = useState([]);
             const [pilots, setPilots] = useState([]);
             const [selectedPilotId, setSelectedPilotId] = useState('');
+            
+            // API Form States
             const [apiFromDate, setApiFromDate] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return formatDate(d); });
             const [apiToDate, setApiToDate] = useState(formatDate(new Date()));
             const [isApiLoading, setIsApiLoading] = useState(false);
             const [apiMessage, setApiMessage] = useState('Sync from the API to get started.');
             const [error, setError] = useState('');
+            
+            // Legality Check States
             const [legalityResult, setLegalityResult] = useState(null);
             const [isCheckingLegality, setIsCheckingLegality] = useState(false);
             const [proposedDutyDate, setProposedDutyDate] = useState(formatDate(new Date()));
             const [proposedStartTime, setProposedStartTime] = useState('09:00');
             const [proposedEndTime, setProposedEndTime] = useState('17:00');
             const [proposedFlightTime, setProposedFlightTime] = useState('6');
+            
+            // Map States
             const [fleetStates, setFleetStates] = useState([]);
             const [isMapLoading, setIsMapLoading] = useState(false);
             const [mapMessage, setMapMessage] = useState('Sync flights to see live fleet data.');
@@ -333,6 +349,55 @@
                 else { setError(`Aircraft ${icao} location not available.`); setTimeout(() => setError(''), 5000); }
             };
 
+            // NEW FUNCTION: Legality checking based on API stats + user proposed flight
+            const handleCheckLegality = (e) => {
+                e.preventDefault();
+                setIsCheckingLegality(true);
+
+                // Simulate calculation processing time for the UI so users feel it updating
+                setTimeout(() => {
+                    const startNode = new Date(`${proposedDutyDate}T${proposedStartTime}`);
+                    let endNode = new Date(`${proposedDutyDate}T${proposedEndTime}`);
+                    
+                    // If end time is earlier than start time, assume it crosses midnight
+                    if (endNode < startNode) endNode.setDate(endNode.getDate() + 1);
+
+                    const proposedDutyHours = (endNode - startNode) / (1000 * 60 * 60);
+                    const proposedFlightHoursNum = parseFloat(proposedFlightTime) || 0;
+
+                    // Fetch cumulative totals from the API processed stats
+                    const pilotStats = dashboardData.find(p => p.pilotId === selectedPilotId) || { total28: 0, total90: 0, total365: 0 };
+
+                    const errors = [];
+                    const warnings = [];
+
+                    // 1. CARs 700.28: Max Flight Duty Period (Approximation of standard 14h limit)
+                    if (proposedDutyHours > 14) {
+                        errors.push(`Proposed duty period (${proposedDutyHours.toFixed(1)}h) exceeds max standard FDP of 14h.`);
+                    }
+
+                    // 2. CARs Cumulative Flight Time Limits against API data
+                    if (pilotStats.total28 + proposedFlightHoursNum > MAX_FLIGHT_TIME_28_DAYS) {
+                        errors.push(`Exceeds 28-day flight limit. Will be ${(pilotStats.total28 + proposedFlightHoursNum).toFixed(1)}h / ${MAX_FLIGHT_TIME_28_DAYS}h.`);
+                    }
+                    if (pilotStats.total90 + proposedFlightHoursNum > MAX_FLIGHT_TIME_90_DAYS) {
+                        errors.push(`Exceeds 90-day flight limit. Will be ${(pilotStats.total90 + proposedFlightHoursNum).toFixed(1)}h / ${MAX_FLIGHT_TIME_90_DAYS}h.`);
+                    }
+                    
+                    // 3. Min Rest (CARs 700.16)
+                    const nextRestEnd = new Date(endNode.getTime() + MIN_REST_AWAY_FROM_BASE * 3600000);
+                    warnings.push(`Minimum ${MIN_REST_AWAY_FROM_BASE}h rest required. Next duty cannot start before ${formatDateTime(nextRestEnd.toISOString())}.`);
+
+                    setLegalityResult({
+                        isLegal: errors.length === 0,
+                        errors,
+                        warnings,
+                        dutyHours: proposedDutyHours.toFixed(1)
+                    });
+                    setIsCheckingLegality(false);
+                }, 400); 
+            };
+
             if (!isAuthReady) return <div className="flex items-center justify-center min-h-screen text-white text-xl">Initializing...</div>;
             if (!user) return <div className="flex items-center justify-center min-h-screen"><div className="w-full max-w-md p-8 space-y-8 bg-slate-800 rounded-xl shadow-2xl text-center"><h2 className="text-3xl font-bold text-sky-400">Authentication Required</h2><p className="text-slate-400">There was an issue authenticating.</p>{error && <div className="bg-red-500/20 text-red-300 p-3 mt-4 rounded-lg">{error}</div>}</div></div>;
             
@@ -347,6 +412,7 @@
                     </header>
                     {error && <div className="bg-red-700/30 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6"><strong className="font-bold">Error: </strong><span className="block sm:inline">{error}</span></div>}
                     
+                    {/* Live Fleet Map Section */}
                     <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700">
                         <h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Live Fleet Map</h2>
                         <div id="fleet-map" className="relative">
@@ -360,11 +426,75 @@
                         </div>
                     </div>
 
-                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold mb-4 text-sky-400 text-center">Sync Flight Data</h2><div className="flex flex-col sm:flex-row justify-center items-end gap-4"><div><label htmlFor="apiFromDate" className="block text-sm font-medium">From</label><input type="date" id="apiFromDate" value={apiFromDate} onChange={e=>setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 rounded-lg p-2"/></div><div><label htmlFor="apiToDate" className="block text-sm font-medium">To</label><input type="date" id="apiToDate" value={apiToDate} onChange={e=>setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 rounded-lg p-2"/></div><button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isApiLoading}>{isApiLoading?'Syncing...':'Sync Flights'}</button></div>{apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}</div>
+                    {/* Sync Flight Data API Section */}
+                    <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Sync Flight Data</h2><div className="flex flex-col sm:flex-row justify-center items-end gap-4"><div><label htmlFor="apiFromDate" className="block text-sm font-medium">From</label><input type="date" id="apiFromDate" value={apiFromDate} onChange={e=>setApiFromDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 rounded-lg p-2"/></div><div><label htmlFor="apiToDate" className="block text-sm font-medium">To</label><input type="date" id="apiToDate" value={apiToDate} onChange={e=>setApiToDate(e.target.value)} required className="mt-1 bg-slate-700 border-slate-600 rounded-lg p-2"/></div><button onClick={fetchAndProcessFlightsFromAPI} className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-bold py-2.5 px-6 rounded-lg shadow-lg" disabled={isApiLoading}>{isApiLoading?'Syncing...':'Sync Flights'}</button></div>{apiMessage && <p className="text-center mt-4 text-slate-400 italic">{apiMessage}</p>}</div>
+                    
+                    {/* Crew Cumulative Status Table */}
                     <div className="mb-6 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold text-center text-sky-400 mb-4">Crew Status</h2><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50"><tr><th className="px-4 py-3 text-left text-xs font-medium uppercase">Pilot</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 28d</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 90d</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Last 365d</th></tr></thead><tbody className="divide-y divide-slate-700">{dashboardData.length > 0 ? dashboardData.map(s => { const p28=(s.total28/112)*100, p90=(s.total90/300)*100, p365=(s.total365/1000)*100; const c=p=>p>90?'text-red-400':p>75?'text-yellow-400':'text-green-400'; return (<tr key={s.pilotId} className="hover:bg-slate-800"><td className="px-4 py-4">{s.name}</td><td className={`px-4 py-4 ${c(p28)}`}>{s.total28.toFixed(1)}/112h</td><td className={`px-4 py-4 ${c(p90)}`}>{s.total90.toFixed(1)}/300h</td><td className={`px-4 py-4 ${c(p365)}`}>{s.total365.toFixed(1)}/1000h</td></tr>)}) : (<tr><td colSpan="4" className="p-5 text-center italic">No data. Sync from API.</td></tr>)}</tbody></table></div></div>
+                    
+                    {/* Bottom Split Layout: Flight Log & Legality Checker */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <div className="lg:col-span-2 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold mb-4 text-sky-400">Flight Log: <span className="font-bold">{pilots.find(p=>p.id===selectedPilotId)?.name||'...'}</span></h2><div className="overflow-auto max-h-[75vh] custom-scrollbar"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50 sticky top-0"><tr><th className="px-4 py-3 text-left text-xs font-medium uppercase">Date (UTC)</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Call Sign</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Route</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Aircraft</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Actions</th></tr></thead><tbody className="divide-y divide-slate-700">{displayedFlights.length>0?displayedFlights.map(f=>(<tr key={f.flightId} className="hover:bg-slate-800"><td className="p-4">{formatDateTime(f.departureTime)}</td><td className="p-4 font-mono">{f.callSign||'N/A'}</td><td className="p-4">{f.departure} {'->'} {f.destination}</td><td className="p-4">{f.aircraftRegistration}</td><td className="p-4"><button onClick={()=>handleCenterOnAircraft(f.icao24)} className="text-sky-400 hover:text-sky-300 font-semibold" disabled={!f.icao24}>Find on Map</button></td></tr>)):(<tr><td colSpan="5" className="p-5 text-center italic">No flights.</td></tr>)}</tbody></table></div></div>
-                        <div className="lg:col-span-1 space-y-6"><div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4"><h2 className="text-xl font-semibold text-sky-400">Legality & Briefing</h2><div><label className="block text-sm font-medium">Pilot</label><select value={selectedPilotId} onChange={e=>{setSelectedPilotId(e.target.value);setLegalityResult(null);setLegalityResult(null)}} className="mt-1 bg-slate-700 border-slate-600 rounded-lg w-full p-2.5" disabled={!pilots.length}>{pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync to populate</option>}</select></div></div></div>
+                        
+                        {/* Selected Pilot Flight Log Table */}
+                        <div className="lg:col-span-2 p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700"><h2 className="text-xl font-semibold mb-4 text-sky-400">Flight Log: <span className="font-bold">{pilots.find(p=>p.id===selectedPilotId)?.name||'Unknown Pilot'}</span></h2><div className="overflow-auto max-h-[75vh] custom-scrollbar"><table className="min-w-full divide-y divide-slate-700"><thead className="bg-slate-700/50 sticky top-0"><tr><th className="px-4 py-3 text-left text-xs font-medium uppercase">Date (UTC)</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Call Sign</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Route</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Aircraft</th><th className="px-4 py-3 text-left text-xs font-medium uppercase">Actions</th></tr></thead><tbody className="divide-y divide-slate-700">{displayedFlights.length>0?displayedFlights.map(f=>(<tr key={f.flightId} className="hover:bg-slate-800"><td className="p-4">{formatDateTime(f.departureTime)}</td><td className="p-4 font-mono">{f.callSign||'N/A'}</td><td className="p-4">{f.departure} {'->'} {f.destination}</td><td className="p-4">{f.aircraftRegistration}</td><td className="p-4"><button onClick={()=>handleCenterOnAircraft(f.icao24)} className="text-sky-400 hover:text-sky-300 font-semibold" disabled={!f.icao24}>Find on Map</button></td></tr>)):(<tr><td colSpan="5" className="p-5 text-center italic">No flights.</td></tr>)}</tbody></table></div></div>
+                        
+                        {/* Legality Checker Sidebar */}
+                        <div className="lg:col-span-1 space-y-6">
+                            <div className="p-6 bg-slate-800/70 backdrop-blur-sm rounded-xl shadow-2xl border border-slate-700 space-y-4">
+                                <h2 className="text-xl font-semibold text-sky-400">Legality & Briefing</h2>
+                                
+                                <form onSubmit={handleCheckLegality} className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Select Pilot</label>
+                                        <select value={selectedPilotId} onChange={e=>{setSelectedPilotId(e.target.value);setLegalityResult(null);}} className="mt-1 bg-slate-700 border border-slate-600 rounded-lg w-full p-2.5 text-white" disabled={!pilots.length}>
+                                            {pilots.length > 0 ? pilots.map(p => (<option key={p.id} value={p.id}>{p.name}</option>)) : <option>Sync to populate</option>}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Proposed Duty Date</label>
+                                        <input type="date" value={proposedDutyDate} onChange={e=>setProposedDutyDate(e.target.value)} required className="mt-1 bg-slate-700 border border-slate-600 rounded-lg w-full p-2.5 text-white"/>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-300">Start Time</label>
+                                            <input type="time" value={proposedStartTime} onChange={e=>setProposedStartTime(e.target.value)} required className="mt-1 bg-slate-700 border border-slate-600 rounded-lg w-full p-2.5 text-white"/>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-300">End Time</label>
+                                            <input type="time" value={proposedEndTime} onChange={e=>setProposedEndTime(e.target.value)} required className="mt-1 bg-slate-700 border border-slate-600 rounded-lg w-full p-2.5 text-white"/>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300">Est. Flight Hours</label>
+                                        <input type="number" step="0.1" min="0" value={proposedFlightTime} onChange={e=>setProposedFlightTime(e.target.value)} required className="mt-1 bg-slate-700 border border-slate-600 rounded-lg w-full p-2.5 text-white"/>
+                                    </div>
+                                    <button type="submit" disabled={isCheckingLegality || !selectedPilotId} className="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-2.5 px-4 rounded-lg transition-colors shadow-lg mt-2">
+                                        {isCheckingLegality ? 'Calculating...' : 'Run Legality Check'}
+                                    </button>
+                                </form>
+
+                                {/* Legality Pass/Fail Result Box */}
+                                {legalityResult && (
+                                    <div className={`mt-4 p-4 rounded-lg border ${legalityResult.isLegal ? 'bg-green-900/30 border-green-500' : 'bg-red-900/30 border-red-500'} animate-pulse`} style={{animationIterationCount: 1}}>
+                                        <h3 className={`font-bold flex items-center gap-2 ${legalityResult.isLegal ? 'text-green-400' : 'text-red-400'}`}>
+                                            {legalityResult.isLegal ? '✓ Legal for Dispatch' : '✗ Legality Failed'}
+                                        </h3>
+                                        <p className="text-sm mt-1 text-slate-300 font-mono">Proposed Duty Period: {legalityResult.dutyHours}h</p>
+                                        
+                                        {legalityResult.errors.length > 0 && (
+                                            <ul className="mt-3 text-sm text-red-300 list-disc list-inside space-y-1">
+                                                {legalityResult.errors.map((e, i) => <li key={i}>{e}</li>)}
+                                            </ul>
+                                        )}
+                                        {legalityResult.warnings.length > 0 && (
+                                            <ul className="mt-3 text-sm text-yellow-300 list-disc list-inside space-y-1">
+                                                {legalityResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                                            </ul>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 </div>
             );
